@@ -1,0 +1,26 @@
+F90 := gfortran
+FFLAGS := -O2 -g -std=f2008 -Wall -Wextra -fcheck=all
+INCDIRS := kdtree2/build
+LIBDIRS := kdtree2/build
+LIBS := kdtree2
+
+OBJS :=
+EXAMPLES := test
+
+.PHONY:	all clean
+
+all: 	$(EXAMPLES)
+
+clean:
+	$(RM) $(EXAMPLES)
+
+# Dependency information
+$(EXAMPLES): 
+
+# How to get .o object files from .f90 source files
+%.o: %.f90
+	$(F90) -c -o $@ $< $(FFLAGS) $(addprefix -I,$(INCDIRS))
+
+# How to get executables from .o object files
+%: %.o
+	$(F90) -o $@ $^ $(FFLAGS) $(addprefix -L,$(LIBDIRS)) $(addprefix -l,$(LIBS))
