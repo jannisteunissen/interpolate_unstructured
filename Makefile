@@ -3,8 +3,6 @@ FFLAGS := -O2 -g -std=f2008 -Wall -Wextra -fcheck=all
 INCDIRS := kdtree2/build
 LIBDIRS := kdtree2/build
 LIBS := kdtree2
-
-OBJS :=
 EXAMPLES := test
 
 .PHONY:	all clean
@@ -12,10 +10,10 @@ EXAMPLES := test
 all: 	$(EXAMPLES)
 
 clean:
-	$(RM) $(EXAMPLES)
+	$(RM) $(EXAMPLES) *.o *.mod
 
 # Dependency information
-$(EXAMPLES): 
+$(EXAMPLES): m_interp_unstructured.o
 
 # How to get .o object files from .f90 source files
 %.o: %.f90
