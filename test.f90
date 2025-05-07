@@ -11,6 +11,8 @@ program interpolate_unstructured
 
   call test_tracking(ug)
 
+  call run_benchmark(ug, 1000*1000)
+
 contains
 
   subroutine test_tracking(ug)
@@ -18,11 +20,67 @@ contains
     real(dp)                       :: r1(3), res
     integer                        :: i_cell
 
-    r1 = [0.0e-3_dp, 5.0_dp, 0.0_dp]
+    r1 = [1.0e-8_dp, 5.0_dp, 0.0_dp]
     i_cell = 0
     call iu_interpolate_at(ug, r1, 1, res, i_cell)
 
     print *, "value at ", r1, " is ", res, " i_cell is ", i_cell
   end subroutine test_tracking
+
+  subroutine run_benchmark(ug, n_samples)
+    use iso_fortran_env, only: int64
+    type(iu_grid_t), intent(inout) :: ug
+    integer, intent(in)            :: n_samples
+    real(dp), allocatable          :: r_samples(:, :), velocity(:, :), res(:)
+    integer, allocatable           :: i_cell(:)
+    real(dp)                       :: rmin(3), rmax(3), domain_size(3)
+    real(dp)                       :: cpu_time, dt
+    integer                        :: n
+    integer(int64)                 :: t_start, t_end, count_rate
+
+    allocate(r_samples(3, n_samples), res(n_samples), i_cell(n_samples))
+    allocate(velocity(3, n_samples))
+
+    rmin = minval(ug%points, dim=2)
+    rmax = maxval(ug%points, dim=2)
+    domain_size = rmax - rmin
+
+    ! Ensure there is some extra space for points to move
+    rmin = rmin + 0.1_dp * domain_size
+    rmax = rmax - 0.1_dp * domain_size
+
+    do n = 1, n_samples
+       call random_number(r_samples(:, n))
+       r_samples(:, n) = rmin + r_samples(:, n) * (rmax - rmin)
+
+       call random_number(velocity(:, n))
+    end do
+
+    i_cell(:) = 0
+
+    call system_clock(t_start, count_rate)
+    do n = 1, n_samples
+       call iu_interpolate_at(ug, r_samples(:, n), 1, res(n), i_cell(n))
+    end do
+    call system_clock(t_end, count_rate)
+
+    cpu_time = (t_end-t_start) / real(count_rate, dp)
+    write(*, "(A,I0,A,E10.3,A)") " Wall-clock for ", n_samples, &
+       " samples: ", cpu_time, " seconds"
+
+    dt = 0.01_dp * minval(domain_size)
+    r_samples = r_samples + dt * velocity
+
+    call system_clock(t_start, count_rate)
+    do n = 1, n_samples
+       call iu_interpolate_at(ug, r_samples(:, n), 1, res(n), i_cell(n))
+    end do
+    call system_clock(t_end, count_rate)
+
+    cpu_time = (t_end-t_start) / real(count_rate, dp)
+    write(*, "(A,I0,A,E10.3,A)") " Wall-clock for ", n_samples, &
+       " samples: ", cpu_time, " seconds"
+
+  end subroutine run_benchmark
 
 end program
