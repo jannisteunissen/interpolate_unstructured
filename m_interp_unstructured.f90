@@ -8,12 +8,17 @@ module m_interp_unstructured
   integer, parameter :: dp = kind(0.0d0)
   integer, parameter :: sp = kind(0.0e0)
 
+  integer, parameter :: ug_triangle = 1
+  integer, parameter :: ug_quad = 2
+
+  integer, parameter :: ug_max_points_per_cell = 4
+
   type iu_grid_t
      integer :: n_cells
      integer :: n_points
      integer :: n_points_per_cell
      integer :: n_faces_per_cell
-     character(len=64) :: cell_type
+     integer :: cell_type
      real(dp), allocatable :: points(:, :)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
@@ -76,7 +81,9 @@ contains
 
     select case (cell_type)
     case ("triangle")
-       ug%cell_type = cell_type
+       ug%cell_type = ug_triangle
+    case ("quad")
+       ug%cell_type = ug_quad
     case default
        write(error_unit, *) "Cell type '", trim(cell_type), "' not supported"
        error stop "Unsupported cell type"
@@ -194,15 +201,21 @@ contains
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_cell
-    real(dp)                    :: values(3)
+    real(dp)                    :: values(ug_max_points_per_cell)
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
     i_cell = find_containing_cell(ug, r, i_cell)
-    values = ug%values(ug%cells(:, i_cell), i_variable)
+    values(1:ug%n_points_per_cell) = ug%values(ug%cells(:, i_cell), i_variable)
 
-    call interpolate_triangle(ug%cell_points(:, :, i_cell), &
-         values, r, var_at_r)
+    select case (ug%cell_type)
+    case (ug_triangle)
+       call interpolate_triangle(ug%cell_points(:, :, i_cell), &
+            values(1:ug%n_points_per_cell), r, var_at_r)
+    case (ug_quad)
+       call interpolate_quad(ug%cell_points(:, :, i_cell), &
+            values(1:ug%n_points_per_cell), r, var_at_r)
+    end select
   end subroutine iu_interpolate_at
 
   subroutine interpolate_triangle(points, values, r, res)
@@ -223,6 +236,65 @@ contains
     ! Perform interpolation
     res = sum(areas * values) / area_full
   end subroutine interpolate_triangle
+
+  ! Interpolate a quad element with four points at arbitary locations, but
+  ! assumed to all have a z-coordinate of zero. The implementation is based
+  ! on: https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/
+  subroutine interpolate_quad(points, values, r, res)
+    real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
+    real(dp), intent(in)  :: values(4)    ! values at vertices
+    real(dp), intent(in)  :: r(3)         ! point for interpolation
+    real(dp), intent(out) :: res          ! interpolated value
+
+    real(dp) :: q(3), b1(3), b2(3), b3(3), denom(3)
+    real(dp) :: A, B, C, discrim, coeff(2), tmp(2)
+    integer  :: max_dim(1)
+    real(dp), parameter :: tiny_value = 1e-20_dp
+
+    ! The order of these points matters, below I have exchanged 3 and 4
+    ! compared to the original source. This works for a counter-clockwise
+    ! ordering of points in the cell.
+    ! TODO: detect order automatically
+    q = r - points(:, 1)
+    b1 = points(:, 2) - points(:, 1)
+    b2 = points(:, 4) - points(:, 1)
+    b3 = points(:, 1) - points(:, 2) - points(:, 4) + points(:, 3)
+
+    ! Set up quadratic formula
+    A = Wedge2D(b2, b3)
+    B = Wedge2D(b3, q) - Wedge2D(b1, b2)
+    C = Wedge2D(b1, q)
+    discrim = B**2 - 4 * A * C
+
+    ! Solve quadratic equation
+    if (abs(A) < tiny_value) then
+       coeff(2) = -C/B
+    else
+       coeff(2) = 0.5_dp * (-B - sqrt(discrim)) / A
+    end if
+
+    denom = b1 + coeff(2) * b3
+
+    ! The nominator and denominator should be parallel, so we can use a single
+    ! coordinate for the division below
+    max_dim = maxloc(abs(denom))
+
+    associate (dim => max_dim(1))
+      coeff(1) = (q(dim) - b2(dim) * coeff(2)) / denom(dim)
+    end associate
+
+    tmp(1) = values(1) * (1 - coeff(1)) + values(2) * coeff(1)
+    tmp(2) = values(4) * (1 - coeff(1)) + values(3) * coeff(1)
+    res = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
+
+  contains
+
+    pure real(dp) function Wedge2D(a, b)
+      real(dp), intent(in) :: a(3), b(3)
+      Wedge2D = a(1) * b(2) - a(2) * b(1)
+    end function Wedge2D
+
+  end subroutine interpolate_quad
 
   ! Helper function to compute the cross product of two 3D vectors
   function cross_product_3d(a, b) result(cross)

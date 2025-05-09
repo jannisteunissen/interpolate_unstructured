@@ -7,7 +7,7 @@ program test_triangle
   character(len=100) :: fname
   type(iu_grid_t)    :: ug
 
-  fname = 'test_data/triangle'
+  fname = 'test_data/quad'
   call iu_read_grid(trim(fname), 1, ['Polynomial'], ug)
 
   call test_interpolation(ug, 1000)
