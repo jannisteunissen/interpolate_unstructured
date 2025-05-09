@@ -6,12 +6,14 @@ module m_interp_unstructured
   private
 
   integer, parameter :: dp = kind(0.0d0)
+  integer, parameter :: sp = kind(0.0e0)
 
   type iu_grid_t
      integer :: n_cells
      integer :: n_points
      integer :: n_points_per_cell
      integer :: n_faces_per_cell
+     character(len=64) :: cell_type
      real(dp), allocatable :: points(:, :)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
@@ -20,7 +22,7 @@ module m_interp_unstructured
      real(dp), allocatable :: values(:, :)
 
      ! kd-tree for searching a nearby cell
-     type(kdtree2), pointer :: tree => null()
+     type(kdtree2) :: tree
   end type iu_grid_t
 
   ! Public types
@@ -45,7 +47,7 @@ contains
             ug%n_points_per_cell
     end do
 
-    ug%tree => kdtree2_create(cell_centers, sort=.false., rearrange=.false.)
+    ug%tree = kdtree2_create(cell_centers, sort=.false., rearrange=.false.)
   end subroutine build_kdtree
 
   ! Find a nearby cell at a new location
@@ -54,7 +56,7 @@ contains
     real(dp), intent(in)        :: r(3)
     type(kdtree2_result)        :: res(1)
 
-    if (.not. associated(ug%tree)) error stop "Build tree first"
+    if (ug%tree%n == 0) error stop "Build tree first"
 
     call kdtree2_n_nearest(ug%tree, r, 1, res)
     i_cell = res(1)%idx
@@ -65,11 +67,24 @@ contains
     integer, intent(in)          :: n_variables
     character(len=*), intent(in) :: variable_names(n_variables)
     type(iu_grid_t), intent(out) :: ug
-    integer                      :: n
+    integer                      :: n, my_unit
+    character(len=64)            :: cell_type
 
-    call read_array_float64_2d(trim(basename) // '_points.bin', ug%points)
-    call read_array_int32_2d(trim(basename) // '_cells.bin', ug%cells)
-    call read_array_int32_2d(trim(basename) // '_neighbors.bin', ug%neighbors)
+    open(newunit=my_unit, file=trim(basename)//'_cell_type.txt', status='old')
+    read(my_unit, *) cell_type
+    close(my_unit)
+
+    select case (cell_type)
+    case ("triangle")
+       ug%cell_type = cell_type
+    case default
+       write(error_unit, *) "Cell type '", trim(cell_type), "' not supported"
+       error stop "Unsupported cell type"
+    end select
+
+    call read_array_float64_2d(trim(basename)//'_points.bin', ug%points)
+    call read_array_int32_2d(trim(basename)//'_cells.bin', ug%cells)
+    call read_array_int32_2d(trim(basename)//'_neighbors.bin', ug%neighbors)
 
     ! Store information about mesh
     ug%n_cells = size(ug%cells, 2)
@@ -118,7 +133,7 @@ contains
   subroutine set_face_normal_vectors(ug)
     type(iu_grid_t), intent(inout) :: ug
     integer                        :: n, k
-    real(dp)                       :: vec(3)
+    real(dp)                       :: vec(3), center(3)
     real(dp)                       :: normal_cell(3), normal_face(3)
 
     allocate(ug%cell_face_normals(3, ug%n_points_per_cell, ug%n_cells))
@@ -129,6 +144,8 @@ contains
             ug%cell_points(:, 2, n) - ug%cell_points(:, 1, n), &
             ug%cell_points(:, 3, n) - ug%cell_points(:, 2, n))
 
+       center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
+
        do k = 1, ug%n_points_per_cell
           if (k < ug%n_points_per_cell) then
              vec = ug%cell_points(:, k+1, n) - ug%cell_points(:, k, n)
@@ -136,9 +153,13 @@ contains
              vec = ug%cell_points(:, 1, n) - ug%cell_points(:, k, n)
           end if
 
-          ! TODO: order depends on arrangement of points
           normal_face = cross_product_3d(vec, normal_cell)
           ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+
+          ! Ensure that face is pointing outwards
+          if (dot_product(ug%cell_points(:, k, n) - center, normal_face) < 0) then
+             normal_face = -normal_face
+          end if
        end do
     end do
   end subroutine set_face_normal_vectors
@@ -292,16 +313,13 @@ contains
 
     integer :: my_unit, ndim, data_shape(1)
     character(len=64) :: dtype_str
+    real(sp), allocatable :: sp_array(:)
 
     ! Open the binary file
     open(newunit=my_unit, file=filename, form='unformatted', &
          access='stream', status='old')
 
     read(my_unit) dtype_str
-    if (dtype_str /= 'float64') then
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected float64'
-    end if
 
     read(my_unit) ndim
     if (ndim /= 1) then
@@ -317,7 +335,18 @@ contains
        error stop 'Wrong data_shape'
     end if
 
-    read(my_unit) array
+    select case (dtype_str)
+    case ('float64')
+       read(my_unit) array
+    case ('float32')
+       allocate(sp_array(array_size))
+       read(my_unit) sp_array
+       array = sp_array
+    case default
+       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
+       error stop 'Wrong dtype, expected float64 or float32'
+    end select
+
     close(my_unit)
 
   end subroutine read_array_float64_1d
@@ -329,16 +358,13 @@ contains
 
     integer :: my_unit, ndim, data_shape(2)
     character(len=64) :: dtype_str
+    real(sp), allocatable :: sp_array(:, :)
 
     ! Open the binary file
     open(newunit=my_unit, file=filename, form='unformatted', &
          access='stream', status='old')
 
     read(my_unit) dtype_str
-    if (dtype_str /= 'float64') then
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected float64'
-    end if
 
     read(my_unit) ndim
     if (ndim /= 2) then
@@ -348,29 +374,37 @@ contains
 
     read(my_unit) data_shape
     allocate(array(data_shape(2), data_shape(1)))
-    read(my_unit) array
+
+    select case (dtype_str)
+    case ('float64')
+       read(my_unit) array
+    case ('float32')
+       allocate(sp_array(data_shape(2), data_shape(1)))
+       read(my_unit) sp_array
+       array = sp_array
+    case default
+       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
+       error stop 'Wrong dtype, expected float64 or float32'
+    end select
 
     close(my_unit)
 
   end subroutine read_array_float64_2d
 
   subroutine read_array_int32_2d(filename, array)
-    use iso_fortran_env, only: error_unit
+    use iso_fortran_env, only: error_unit, int64
     character(len=*), intent(in) :: filename
     integer, allocatable         :: array(:, :)
 
     integer :: my_unit, ndim, data_shape(2)
     character(len=64) :: dtype_str
+    integer(int64), allocatable :: int64_array(:, :)
 
     ! Open the binary file
     open(newunit=my_unit, file=filename, form='unformatted', &
          access='stream', status='old')
 
     read(my_unit) dtype_str
-    if (dtype_str /= 'int32') then
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected int32'
-    end if
 
     read(my_unit) ndim
     if (ndim /= 2) then
@@ -380,7 +414,18 @@ contains
 
     read(my_unit) data_shape
     allocate(array(data_shape(2), data_shape(1)))
-    read(my_unit) array
+
+    select case (dtype_str)
+    case ('int64')
+       allocate(int64_array(data_shape(2), data_shape(1)))
+       read(my_unit) int64_array
+       array = int(int64_array)
+    case ('int32')
+       read(my_unit) array
+    case default
+       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
+       error stop 'Wrong dtype, expected float64 or float32'
+    end select
 
     close(my_unit)
 

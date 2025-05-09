@@ -67,6 +67,10 @@ if args.output_basename is None:
 with open(args.output_basename + '_points.bin', 'wb') as f:
     write_array_to_binary(mesh.points, f)
 
+with open(args.output_basename + '_cell_type.txt', 'w') as f:
+    # Assume single cellblock
+    f.write(mesh.cells[0].type + '\n')
+
 with open(args.output_basename + '_cells.bin', 'wb') as f:
     # Assume single cellblock
     write_array_to_binary(mesh.cells[0].data, f)
