@@ -10,6 +10,7 @@ module m_interp_unstructured
 
   integer, parameter :: ug_triangle = 1
   integer, parameter :: ug_quad = 2
+  integer, parameter :: ug_tetra = 3
 
   integer, parameter :: ug_max_points_per_cell = 4
 
@@ -84,6 +85,8 @@ contains
        ug%cell_type = ug_triangle
     case ("quad")
        ug%cell_type = ug_quad
+    case ("tetra")
+       ug%cell_type = ug_tetra
     case default
        write(error_unit, *) "Cell type '", trim(cell_type), "' not supported"
        error stop "Unsupported cell type"
@@ -96,7 +99,7 @@ contains
     ! Store information about mesh
     ug%n_cells = size(ug%cells, 2)
     ug%n_points_per_cell = size(ug%cells, 1)
-    ug%n_faces_per_cell = size(ug%cells, 1) ! TODO: only in 2d
+    ug%n_faces_per_cell = size(ug%cells, 1) ! works for triangle, quad, tetra
     ug%n_points = size(ug%points, 2)
 
     ! Convert to 1-based indexing
@@ -139,36 +142,61 @@ contains
   ! Compute normal vectors to cell faces
   subroutine set_face_normal_vectors(ug)
     type(iu_grid_t), intent(inout) :: ug
-    integer                        :: n, k
+    integer                        :: n, k, k1, k2
     real(dp)                       :: vec(3), center(3)
     real(dp)                       :: normal_cell(3), normal_face(3)
 
     allocate(ug%cell_face_normals(3, ug%n_points_per_cell, ug%n_cells))
 
-    do n = 1, ug%n_cells
-       ! Compute vector normal to the cell
-       normal_cell = cross_product_3d(&
-            ug%cell_points(:, 2, n) - ug%cell_points(:, 1, n), &
-            ug%cell_points(:, 3, n) - ug%cell_points(:, 2, n))
+    select case (ug%cell_type)
+    case (ug_triangle, ug_quad)
+       do n = 1, ug%n_cells
+          center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
 
-       center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
+          ! Compute vector normal to the cell, assuming it to be flat
+          normal_cell = cross_product_3d(&
+               ug%cell_points(:, 2, n) - ug%cell_points(:, 1, n), &
+               ug%cell_points(:, 3, n) - ug%cell_points(:, 2, n))
 
-       do k = 1, ug%n_points_per_cell
-          if (k < ug%n_points_per_cell) then
-             vec = ug%cell_points(:, k+1, n) - ug%cell_points(:, k, n)
-          else
-             vec = ug%cell_points(:, 1, n) - ug%cell_points(:, k, n)
-          end if
+          do k = 1, ug%n_points_per_cell
+             k1 = mod(k, ug%n_points_per_cell) + 1
 
-          normal_face = cross_product_3d(vec, normal_cell)
-          ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+             vec = ug%cell_points(:, k1, n) - ug%cell_points(:, k, n)
+             normal_face = cross_product_3d(vec, normal_cell)
+             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
 
-          ! Ensure that face is pointing outwards
-          if (dot_product(ug%cell_points(:, k, n) - center, normal_face) < 0) then
-             normal_face = -normal_face
-          end if
+             ! Ensure that face is pointing outwards
+             vec = ug%cell_points(:, k, n) - center
+             if (dot_product(vec, normal_face) < 0) then
+                normal_face = -normal_face
+             end if
+          end do
        end do
-    end do
+    case (ug_tetra)
+       do n = 1, ug%n_cells
+          center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
+
+          do k = 1, ug%n_points_per_cell
+             k1 = mod(k, ug%n_points_per_cell) + 1
+             k2 = mod(k+1, ug%n_points_per_cell) + 1
+
+             normal_face = cross_product_3d(&
+                  ug%cell_points(:, k1, n) - ug%cell_points(:, k, n), &
+                  ug%cell_points(:, k2, n) - ug%cell_points(:, k1, n))
+
+             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+
+             ! Ensure that face is pointing outwards
+             vec = ug%cell_points(:, k, n) - center
+             if (dot_product(vec, normal_face) < 0) then
+                normal_face = -normal_face
+             end if
+          end do
+       end do
+    case default
+       error stop 'Not implemented'
+    end select
+
   end subroutine set_face_normal_vectors
 
   ! Find cell containing r, optionally using a nearby cell as a starting point
@@ -215,6 +243,8 @@ contains
     case (ug_quad)
        call interpolate_quad(ug%cell_points(:, :, i_cell), &
             values(1:ug%n_points_per_cell), r, var_at_r)
+    case default
+       error stop "Not implemented"
     end select
   end subroutine iu_interpolate_at
 
@@ -237,9 +267,9 @@ contains
     res = sum(areas * values) / area_full
   end subroutine interpolate_triangle
 
-  ! Interpolate a quad element with four points at arbitary locations, but
-  ! assumed to all have a z-coordinate of zero. The implementation is based
-  ! on: https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/
+  ! Interpolate a quad element with four points at arbitary locations. The
+  ! implementation is based on:
+  ! https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/
   subroutine interpolate_quad(points, values, r, res)
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
     real(dp), intent(in)  :: values(4)    ! values at vertices
@@ -251,19 +281,17 @@ contains
     integer  :: max_dim(1)
     real(dp), parameter :: tiny_value = 1e-20_dp
 
-    ! The order of these points matters, below I have exchanged 3 and 4
-    ! compared to the original source. This works for a counter-clockwise
-    ! ordering of points in the cell.
-    ! TODO: detect order automatically
+    ! Below, points(:,1) is the first neighbor of points(:,1), and points(:,4)
+    ! is the second neighbor, whereas points(:,3) is the diagonal neighbor
     q = r - points(:, 1)
-    b1 = points(:, 2) - points(:, 1)
-    b2 = points(:, 4) - points(:, 1)
+    b1 = points(:, 2) - points(:, 1) ! First neighbor
+    b2 = points(:, 4) - points(:, 1) ! Second neighbor
     b3 = points(:, 1) - points(:, 2) - points(:, 4) + points(:, 3)
 
     ! Set up quadratic formula
-    A = Wedge2D(b2, b3)
-    B = Wedge2D(b3, q) - Wedge2D(b1, b2)
-    C = Wedge2D(b1, q)
+    A = cross_product_z(b2, b3)
+    B = cross_product_z(b3, q) - cross_product_z(b1, b2)
+    C = cross_product_z(b1, q)
     discrim = B**2 - 4 * A * C
 
     ! Solve quadratic equation
@@ -283,16 +311,17 @@ contains
       coeff(1) = (q(dim) - b2(dim) * coeff(2)) / denom(dim)
     end associate
 
+    ! Perform bilinear interpolation using the found coefficients
     tmp(1) = values(1) * (1 - coeff(1)) + values(2) * coeff(1)
     tmp(2) = values(4) * (1 - coeff(1)) + values(3) * coeff(1)
     res = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
 
   contains
 
-    pure real(dp) function Wedge2D(a, b)
+    pure real(dp) function cross_product_z(a, b)
       real(dp), intent(in) :: a(3), b(3)
-      Wedge2D = a(1) * b(2) - a(2) * b(1)
-    end function Wedge2D
+      cross_product_z = a(1) * b(2) - a(2) * b(1)
+    end function cross_product_z
 
   end subroutine interpolate_quad
 
@@ -361,7 +390,7 @@ contains
 
        ! Only consider faces whose normal points towards path_unit_vec
        if (path_dot_n > 0) then
-          ! TODO: point on the cell face, generalize for 3d
+          ! Point on the cell face, works for triangle, quad, tetra
           r_face = ug%cell_points(:, k, i_cell)
 
           dist = dot_product(r_face - r_p, face_normal) / path_dot_n

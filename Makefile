@@ -3,7 +3,7 @@ FFLAGS := -O2 -g -std=f2008 -Wall -Wextra
 INCDIRS := kdtree2/build
 LIBDIRS := kdtree2/build
 LIBS := kdtree2
-EXAMPLES := benchmark test_triangle test_quad
+EXAMPLES := benchmark test_triangle test_quad test_tetra
 
 .PHONY:	all clean
 
