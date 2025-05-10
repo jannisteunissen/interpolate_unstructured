@@ -270,6 +270,8 @@ contains
     res = sum(areas * values) / area_full
   end subroutine interpolate_triangle
 
+  ! Based on https://www.cdsimpson.net/2014/10/barycentric-coordinates.html
+  ! https://stackoverflow.com/questions/38545520/barycentric-coordinates-of-a-tetrahedron
   subroutine interpolate_tetrahedron(points, values, r, res)
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
     real(dp), intent(in)  :: values(4)    ! values at vertices
