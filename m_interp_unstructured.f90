@@ -14,6 +14,8 @@ module m_interp_unstructured
 
   integer, parameter :: ug_max_points_per_cell = 4
 
+  real(dp), parameter :: tiny_distance = 1e-100_dp
+
   type iu_grid_t
      integer :: n_cells
      integer :: n_points
@@ -154,7 +156,7 @@ contains
           center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
 
           ! Compute vector normal to the cell, assuming it to be flat
-          normal_cell = cross_product_3d(&
+          normal_cell = cross_product(&
                ug%cell_points(:, 2, n) - ug%cell_points(:, 1, n), &
                ug%cell_points(:, 3, n) - ug%cell_points(:, 2, n))
 
@@ -162,14 +164,13 @@ contains
              k1 = mod(k, ug%n_points_per_cell) + 1
 
              vec = ug%cell_points(:, k1, n) - ug%cell_points(:, k, n)
-             normal_face = cross_product_3d(vec, normal_cell)
-             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+             normal_face = cross_product(vec, normal_cell)
 
              ! Ensure that face is pointing outwards
              vec = ug%cell_points(:, k, n) - center
-             if (dot_product(vec, normal_face) < 0) then
-                normal_face = -normal_face
-             end if
+             if (dot_product(vec, normal_face) < 0) normal_face = -normal_face
+
+             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
           end do
        end do
     case (ug_tetra)
@@ -180,17 +181,15 @@ contains
              k1 = mod(k, ug%n_points_per_cell) + 1
              k2 = mod(k+1, ug%n_points_per_cell) + 1
 
-             normal_face = cross_product_3d(&
+             normal_face = cross_product(&
                   ug%cell_points(:, k1, n) - ug%cell_points(:, k, n), &
                   ug%cell_points(:, k2, n) - ug%cell_points(:, k1, n))
 
-             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
-
              ! Ensure that face is pointing outwards
              vec = ug%cell_points(:, k, n) - center
-             if (dot_product(vec, normal_face) < 0) then
-                normal_face = -normal_face
-             end if
+             if (dot_product(vec, normal_face) < 0) normal_face = -normal_face
+
+             ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
           end do
        end do
     case default
@@ -212,6 +211,7 @@ contains
 
     ! Start from center of cell i_guess
     r0 = sum(ug%cell_points(:, :, i_guess), dim=2) / ug%n_points_per_cell
+
     call get_cell_through_neighbors(ug, r0, r, i_guess, i_cell)
 
     if (i_cell < 1) then
@@ -243,6 +243,9 @@ contains
     case (ug_quad)
        call interpolate_quad(ug%cell_points(:, :, i_cell), &
             values(1:ug%n_points_per_cell), r, var_at_r)
+    case (ug_tetra)
+       call interpolate_tetrahedron(ug%cell_points(:, :, i_cell), &
+            values(1:ug%n_points_per_cell), r, var_at_r)
     case default
        error stop "Not implemented"
     end select
@@ -257,15 +260,42 @@ contains
 
     ! Compute areas to find barycentric coordinates. The factors 0.5 cancel in
     ! the final computation and have been left out.
-    area_full = norm2(cross_product_3d(points(:, 2) - points(:, 1), &
+    area_full = norm2(cross_product(points(:, 2) - points(:, 1), &
          points(:, 3) - points(:, 1)))
-    areas(1) = norm2(cross_product_3d(r - points(:, 2), r - points(:, 3)))
-    areas(2) = norm2(cross_product_3d(r - points(:, 3), r - points(:, 1)))
-    areas(3) = norm2(cross_product_3d(r - points(:, 1), r - points(:, 2)))
+    areas(1) = norm2(cross_product(r - points(:, 2), r - points(:, 3)))
+    areas(2) = norm2(cross_product(r - points(:, 3), r - points(:, 1)))
+    areas(3) = norm2(cross_product(r - points(:, 1), r - points(:, 2)))
 
     ! Perform interpolation
     res = sum(areas * values) / area_full
   end subroutine interpolate_triangle
+
+  subroutine interpolate_tetrahedron(points, values, r, res)
+    real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
+    real(dp), intent(in)  :: values(4)    ! values at vertices
+    real(dp), intent(in)  :: r(3)         ! point for interpolation
+    real(dp), intent(out) :: res          ! interpolated value
+    real(dp)              :: weights(4), full_weight
+    real(dp), dimension(3) :: v1r, v2r, v12, v13, v14, v23, v24
+
+    v1r = r - points(:, 1)
+    v2r = r - points(:, 2)
+    v12 = points(:, 2) - points(:, 1)
+    v13 = points(:, 3) - points(:, 1)
+    v14 = points(:, 4) - points(:, 1)
+    v23 = points(:, 3) - points(:, 2)
+    v24 = points(:, 4) - points(:, 2)
+
+    weights(1) = scalar_triple_product(v2r, v24, v23)
+    weights(2) = scalar_triple_product(v1r, v13, v14)
+    weights(3) = scalar_triple_product(v1r, v14, v12)
+    weights(4) = scalar_triple_product(v1r, v12, v13)
+    full_weight = scalar_triple_product(v12, v13, v14)
+
+    ! Perform interpolation
+    res = sum(weights * values) / full_weight
+
+  end subroutine interpolate_tetrahedron
 
   ! Interpolate a quad element with four points at arbitary locations. The
   ! implementation is based on:
@@ -316,24 +346,28 @@ contains
     tmp(2) = values(4) * (1 - coeff(1)) + values(3) * coeff(1)
     res = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
 
-  contains
-
-    pure real(dp) function cross_product_z(a, b)
-      real(dp), intent(in) :: a(3), b(3)
-      cross_product_z = a(1) * b(2) - a(2) * b(1)
-    end function cross_product_z
-
   end subroutine interpolate_quad
 
   ! Helper function to compute the cross product of two 3D vectors
-  function cross_product_3d(a, b) result(cross)
+  pure function cross_product(a, b) result(cross)
     real(dp), intent(in) :: a(3), b(3)
     real(dp)             :: cross(3)
 
     cross(1) = a(2) * b(3) - a(3) * b(2)
     cross(2) = a(3) * b(1) - a(1) * b(3)
     cross(3) = a(1) * b(2) - a(2) * b(1)
-  end function cross_product_3d
+  end function cross_product
+
+  ! Return z-coordinate of cross product, useful if a(3) and b(3) are zero
+  pure real(dp) function cross_product_z(a, b)
+    real(dp), intent(in) :: a(3), b(3)
+    cross_product_z = a(1) * b(2) - a(2) * b(1)
+  end function cross_product_z
+
+  pure real(dp) function scalar_triple_product(a, b, c) result(stp)
+    real(dp), intent(in) :: a(3), b(3), c(3)
+    stp = dot_product(a, cross_product(b, c))
+  end function scalar_triple_product
 
   ! Determine the index of the cell at r1, given that r0 was in cell ic0
   subroutine get_cell_through_neighbors(ug, r0, r1, ic0, ic1)
@@ -348,7 +382,13 @@ contains
     integer  :: i_face
 
     distance_left = norm2(r1 - r0)
-    path_unit_vec = (r1 - r0)/distance_left
+
+    if (distance_left < tiny_distance) then
+       ic1 = ic0
+       return
+    end if
+
+    path_unit_vec = (r1 - r0) / distance_left
     r_p           = r0          ! Current position
     ic1           = ic0         ! Current cell
 
@@ -365,6 +405,7 @@ contains
           exit                  ! Done
        end if
     end do
+
   end subroutine get_cell_through_neighbors
 
   ! Given a cell, a direction, and a start position, determine through which

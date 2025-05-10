@@ -33,6 +33,11 @@ contains
        r_samples(:, n) = rmin + r_samples(:, n) * (rmax - rmin)
     end do
 
+    ! Set solution at points
+    do n = 1, ug%n_points
+       ug%values(n, 1) = solution(ug%points(:, n))
+    end do
+
     i_cell(:) = 0
 
     do n = 1, n_samples

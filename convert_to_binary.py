@@ -19,7 +19,7 @@ def write_array_to_binary(array, fh):
     fh.write(array)
 
 
-def get_cell_neighbors(cells, points_per_face):
+def get_cell_neighbors(cells, n_points_face):
     """Determine neighbors for each cell, with cell_neighbor[i_cell, i_vertex]
     being the index of the neighbor connected to the face with index i_vertex,
     and -1 if there is no neighbor
@@ -34,16 +34,16 @@ def get_cell_neighbors(cells, points_per_face):
         # Create faces for the current cell
         n_vertices = len(cell)
         for i in range(n_vertices):
-            face_points = [cell[k % n_vertices] for
-                           k in range(points_per_face)]
+            face_points = [cell[(i + k) % n_vertices]
+                           for k in range(n_points_face)]
             face = tuple(sorted(face_points))
             face_to_cells[face].append(cell_id)
 
     for cell_id, cell in enumerate(cells):
         n_vertices = len(cell)
         for i in range(n_vertices):
-            face_points = [cell[k % n_vertices] for
-                           k in range(points_per_face)]
+            face_points = [cell[(i + k) % n_vertices]
+                           for k in range(n_points_face)]
             face = tuple(sorted(face_points))
             all_cells = face_to_cells[face]
 

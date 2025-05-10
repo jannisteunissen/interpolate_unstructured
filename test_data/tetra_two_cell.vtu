@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="0.1">
+<UnstructuredGrid>
+<Piece NumberOfPoints="5" NumberOfCells="2">
+<Points>
+<DataArray type="Float64" NumberOfComponents="3">
+0 0 0
+1 0 0
+0 1 0
+0.5 0.5 1
+1 1 0
+</DataArray>
+</Points>
+<Cells>
+<DataArray type="Int32" Name="connectivity">
+0 1 2 3 1 2 3 4
+ </DataArray>
+<DataArray type="Int32" Name="offsets">
+4 8
+</DataArray>
+<DataArray type="Int32" Name="types">
+10 10
+</DataArray>
+</Cells>
+<PointData>
+<DataArray type="Float64" Name="Polynomial" format="ascii">
+  1 2 2 3 3
+</DataArray>
+</PointData>
+</Piece>
+</UnstructuredGrid>
+</VTKFile>
