@@ -6,3 +6,4 @@
 *_cell_type.txt
 *.o
 *.mod
+/libinterp_unstructured.a

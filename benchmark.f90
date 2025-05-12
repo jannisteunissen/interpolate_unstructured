@@ -6,8 +6,8 @@ program benchmark
   character(len=100) :: fname
   type(iu_grid_t)    :: ug
 
-  fname = 'Electric_Potential_needle'
-  call iu_read_grid(trim(fname), 1, ['Color'], ug)
+  fname = 'test_data/triangle'
+  call iu_read_grid(trim(fname), 1, ['Polynomial'], ug)
 
   call run_benchmark(ug, 1000*1000)
 

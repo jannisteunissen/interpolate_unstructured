@@ -1,15 +1,16 @@
 F90 := gfortran
 FFLAGS := -O2 -g -std=f2008 -Wall -Wextra
-INCDIRS := kdtree2/build
-LIBDIRS := kdtree2/build
-LIBS := kdtree2
 TESTS := test_triangle test_quad test_tetra
 EXAMPLES := benchmark $(TESTS)
+LIB := libinterp_unstructured.a
+OBJECTS := m_interp_unstructured.o kdtree2_module.o
 
+# So that kdtree2_module.f90 can be found
+vpath %.f90 kdtree2/src
 
 .PHONY:	all clean test
 
-all: 	$(EXAMPLES)
+all: 	$(EXAMPLES) $(LIB)
 
 test:	$(TESTS)
 	@for test in $(TESTS); do \
@@ -20,9 +21,13 @@ test:	$(TESTS)
 clean:
 	$(RM) $(EXAMPLES) *.o *.mod
 
+$(LIB): $(OBJECTS)
+	$(AR) rcs $@ $^
+
 # Dependency information
-$(EXAMPLES): m_interp_unstructured.o
-$(EXAMPLES:%=%.o): m_interp_unstructured.o
+$(EXAMPLES): $(OBJECTS)
+$(EXAMPLES:%=%.o): $(OBJECTS)
+m_interp_unstructured.o: kdtree2_module.o
 
 # How to get .o object files from .f90 source files
 %.o: %.f90
