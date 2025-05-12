@@ -1,5 +1,5 @@
 module m_interp_unstructured
-  use iso_fortran_env, only: error_unit
+  use iso_fortran_env, only: error_unit, int64
   use kdtree2_module
 
   implicit none
@@ -39,6 +39,7 @@ module m_interp_unstructured
   ! Public methods
   public :: iu_read_grid
   public :: iu_interpolate_at
+  public :: read_binary_data
 
 contains
 
@@ -574,5 +575,70 @@ contains
     close(my_unit)
 
   end subroutine read_array_int32_2d
+
+  subroutine read_binary_data(filename)
+    character(len=*), intent(in) :: filename
+    integer                      :: my_unit
+    integer                      :: i
+    character(len=128)           :: name, data_type
+    integer(int64)               :: n_entries, total_header_size
+    integer(int64)               :: offset, ndim, shape(8), old_pos
+    real(dp), allocatable        :: data(:)
+    real(sp) :: tmp_float32(27)
+
+    ! Open the file
+    open(newunit=my_unit, file=filename, status='old', &
+         form='unformatted', access='stream')
+
+    ! Read the number of entries and total header size
+    read(my_unit) n_entries
+    read(my_unit) total_header_size
+
+    print *, n_entries, total_header_size
+
+    ! Loop over each entry
+    do i = 1, n_entries
+       ! Read entry metadata
+       read(my_unit) name
+       read(my_unit) data_type
+       read(my_unit) ndim
+       read(my_unit) shape
+       read(my_unit) offset
+
+       ! ! Allocate memory for data corresponding to this entry
+       ! allocate(data(entry_size))
+
+       ! ! Move file pointer to the offset and read the binary data
+       ! inquire(unit=my_unit, size=unit_size(my_unit))  ! Get unit size
+       ! find_offset = total_header_size + offset
+       ! position(unit=my_unit) = find_offset
+       ! read(my_unit) data  ! Read data into the array
+
+       ! Optionally: Print out information (e.g., name, data type, and retrieved data)
+       print *, "Name: ", trim(name)
+       print *, "Data type: ", trim(data_type)
+       print *, "ndim: ", ndim
+       print *, "shape: ", shape
+       print *, "offset:", offset
+
+       inquire(unit=my_unit, pos=file_pos)
+       if (data_type == 'float32') then
+          print *, offset, total_header_size
+          read(my_unit, pos=offset+1) tmp_float32
+          print *, tmp_float32
+          stop
+       else
+          print *, "NOT float32"
+       end if
+
+       ! write(*, *) "Data: ", data
+
+       ! Deallocate after usage (if necessary)
+       ! deallocate(data)
+    end do
+
+    ! Close the file
+    close(unit=my_unit)
+  end subroutine read_binary_data
 
 end module m_interp_unstructured
