@@ -47,6 +47,7 @@ module m_interp_unstructured
   ! Public methods
   public :: iu_read_grid
   public :: iu_get_point_data_index
+  public :: iu_get_cell
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
 
@@ -165,7 +166,7 @@ contains
   end subroutine set_face_normal_vectors
 
   ! Find cell containing r, optionally using a nearby cell as a starting point
-  integer function find_containing_cell(ug, r, i_guess) result(i_cell)
+  integer function iu_get_cell(ug, r, i_guess) result(i_cell)
     type(iu_grid_t), intent(in) :: ug
     real(dp), intent(in)        :: r(3)
     integer, intent(inout)      :: i_guess
@@ -184,7 +185,7 @@ contains
        write(error_unit, *) "ERROR: cannot find cell containing", r
        error stop "Point is probably outside domain"
     end if
-  end function find_containing_cell
+  end function iu_get_cell
 
   ! Interpolate scalar at location r
   subroutine iu_interpolate_scalar_at(ug, r, i_var, var_at_r, i_cell)
@@ -216,7 +217,7 @@ contains
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
-    i_cell = find_containing_cell(ug, r, i_cell)
+    i_cell = iu_get_cell(ug, r, i_cell)
 
     do n = 1, n_vars
        point_data(1:ug%n_points_per_cell, n) = &
