@@ -8,7 +8,7 @@ import numpy as np
 import meshio
 
 
-class BinaryDataStore:
+class BindaWriter:
     """
     A class to store multiple binary data entries along with their metadata.
 
@@ -17,17 +17,18 @@ class BinaryDataStore:
     """
 
     def __init__(self):
-        """Initialize the BinaryDataStore."""
+        """Initialize the BindaWriter."""
         self.entries = []
         self.binary_data_storage = bytearray()
 
-    def add_entry(self, name, data):
+    def add_entry(self, name, data, metadata=""):
         """
         Add a data entry to the store.
 
         Args:
             name (str): An identifier for the data (max length 128).
             data (np.ndarray): The data to store (must be a numpy array).
+            metadata (str): optional metadata (max length 128).
 
         Raises:
             ValueError: If the name exceeds 128 characters or
@@ -50,10 +51,11 @@ class BinaryDataStore:
         # Compute offset for the current data
         offset = len(self.binary_data_storage) - len(binary_data)
 
-        # Append entry info (name, data type, ndim, shape, offset)
+        # Append entry info (name, data type, metadata, ndim, shape, offset)
         self.entries.append((
             name.ljust(128).encode('ascii'),
             str(data.dtype).ljust(128).encode('ascii'),
+            metadata.ljust(128).encode('ascii'),
             data.ndim,
             data.shape,
             offset
@@ -66,28 +68,40 @@ class BinaryDataStore:
         Args:
             filename (str): Path to the file where the data will be written.
         """
+
+        # Size of header per entry
         header_size = (
             struct.calcsize('128s') +   # Size for name
             struct.calcsize('128s') +   # Size for data type
+            struct.calcsize('128s') +   # Size for metadata
             struct.calcsize('q') +      # Size for ndim
             struct.calcsize('8q') +     # Size for shape, 8 dimensions max
             struct.calcsize('q')        # Size for offset
         )
 
         n_entries = len(self.entries)
-        total_header_size = 2 * struct.calcsize('q') + n_entries * header_size
+        total_header_size = (
+            struct.calcsize('8s') +  # size for 'BINDA' identifier
+            struct.calcsize('q') +  # size for n_entries
+            struct.calcsize('q') +  # size for total_header_size
+            n_entries * header_size  # size of rest of header
+        )
 
         with open(filename, 'wb') as f:
+            identifier = 'BINDA'.ljust(8).encode('ascii')
+            f.write(struct.pack('8s', identifier))
+
             # Write the number of entries and total header size
             f.write(struct.pack('q', n_entries))
             f.write(struct.pack('q', total_header_size))
 
             # Write each entry's metadata
             for entry in self.entries:
-                name, data_type, ndim, shape, offset = entry
+                name, data_type, metadata, ndim, shape, offset = entry
                 offset += total_header_size  # Adjust for header size
                 f.write(struct.pack('128s', name))
                 f.write(struct.pack('128s', data_type))
+                f.write(struct.pack('128s', metadata))
                 f.write(struct.pack('q', ndim))
                 # Pad `shape` with zeros if its length is smaller than 8
                 f.write(struct.pack('8q', *(shape + (0,) * (8 - len(shape)))))
@@ -154,7 +168,7 @@ parser.add_argument('-output_basename', type=str, help='Basename for output')
 args = parser.parse_args()
 
 mesh = meshio.read(args.infile)
-binstore = BinaryDataStore()
+binstore = BindaWriter()
 
 if args.output_basename is None:
     args.output_basename = os.path.splitext(args.infile)[0]
@@ -171,7 +185,7 @@ with open(args.output_basename + '_cell_type.txt', 'w') as f:
 
 with open(args.output_basename + '_cells.bin', 'wb') as f:
     write_array_to_binary(mesh.cells[0].data, f)
-    binstore.add_entry('cells_' + mesh.cells[0].type, mesh.cells[0].data)
+    binstore.add_entry('cells', mesh.cells[0].data, mesh.cells[0].type)
 
 if mesh.cells[0].type in ['triangle', 'quad']:
     n_points_per_face = 2
@@ -189,6 +203,8 @@ with open(args.output_basename + '_neighbors.bin', 'wb') as f:
 for var in mesh.point_data:
     with open(args.output_basename + f'_point_data_{var}.bin', 'wb') as f:
         write_array_to_binary(mesh.point_data[var], f)
-        binstore.add_entry(f'point_data_{var}', mesh.point_data[var])
+        binstore.add_entry(f'point_data', mesh.point_data[var], var)
 
-binstore.write_to_file(args.output_basename + '.bin')
+fname = args.output_basename + '.binda'
+binstore.write_to_file(fname)
+print(f'Stored {fname}')

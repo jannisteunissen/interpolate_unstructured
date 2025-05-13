@@ -3,11 +3,9 @@ program benchmark
 
   implicit none
   integer, parameter :: dp = kind(0.0d0)
-  character(len=100) :: fname
   type(iu_grid_t)    :: ug
 
-  fname = 'test_data/triangle'
-  call iu_read_grid(trim(fname), 1, ['Polynomial'], ug)
+  call iu_read_grid('test_data/triangle.binda', ug)
 
   call run_benchmark(ug, 1000*1000)
 

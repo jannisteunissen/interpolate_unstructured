@@ -3,7 +3,7 @@ FFLAGS := -O2 -g -std=f2008 -Wall -Wextra
 TESTS := test_triangle test_quad test_tetra
 EXAMPLES := benchmark $(TESTS)
 LIB := libinterp_unstructured.a
-OBJECTS := m_interp_unstructured.o kdtree2_module.o
+OBJECTS := m_interp_unstructured.o kdtree2_module.o m_binda.o
 
 # So that kdtree2_module.f90 can be found
 vpath %.f90 kdtree2/src
@@ -27,7 +27,7 @@ $(LIB): $(OBJECTS)
 # Dependency information
 $(EXAMPLES): $(OBJECTS)
 $(EXAMPLES:%=%.o): $(OBJECTS)
-m_interp_unstructured.o: kdtree2_module.o
+m_interp_unstructured.o: kdtree2_module.o m_binda.o
 
 # How to get .o object files from .f90 source files
 %.o: %.f90

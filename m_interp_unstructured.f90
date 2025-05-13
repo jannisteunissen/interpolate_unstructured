@@ -1,6 +1,7 @@
 module m_interp_unstructured
   use iso_fortran_env, only: error_unit, int64
   use kdtree2_module
+  use m_binda
 
   implicit none
   private
@@ -16,18 +17,25 @@ module m_interp_unstructured
 
   real(dp), parameter :: tiny_distance = 1e-100_dp
 
+  ! Type for storing an unstructured grid with additional data for efficient
+  ! interpolation
   type iu_grid_t
      integer :: n_cells
      integer :: n_points
      integer :: n_points_per_cell
      integer :: n_faces_per_cell
      integer :: cell_type
+     integer :: n_point_data
+
      real(dp), allocatable :: points(:, :)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
      integer, allocatable  :: neighbors(:, :)
      real(dp), allocatable :: cell_face_normals(:, :, :)
-     real(dp), allocatable :: values(:, :)
+     real(dp), allocatable :: point_data(:, :)
+
+     ! Names of the variables
+     character(len=128), allocatable :: point_data_names(:)
 
      ! kd-tree for searching a nearby cell
      type(kdtree2) :: tree
@@ -38,10 +46,23 @@ module m_interp_unstructured
 
   ! Public methods
   public :: iu_read_grid
+  public :: iu_get_point_data_index
   public :: iu_interpolate_at
-  public :: read_binary_data
 
 contains
+
+  ! Find index of point data variable, -1 if not present
+  subroutine iu_get_point_data_index(ug, name, ix)
+    type(iu_grid_t), intent(in)  :: ug
+    character(len=*), intent(in) :: name
+    integer, intent(out)         :: ix
+
+    do ix = 1, ug%n_point_data
+       if (ug%point_data_names(ix) == name) exit
+    end do
+
+    if (ix == ug%n_point_data + 1) ix = -1
+  end subroutine iu_get_point_data_index
 
   ! Create kd-tree to efficiently find a (nearby) cell for a new search at a
   ! new location
@@ -70,63 +91,6 @@ contains
     call kdtree2_n_nearest(ug%tree, r, 1, res)
     i_cell = res(1)%idx
   end function find_nearby_cell_kdtree
-
-  subroutine iu_read_grid(basename, n_variables, variable_names, ug)
-    character(len=*), intent(in) :: basename
-    integer, intent(in)          :: n_variables
-    character(len=*), intent(in) :: variable_names(n_variables)
-    type(iu_grid_t), intent(out) :: ug
-    integer                      :: n, my_unit
-    character(len=64)            :: cell_type
-
-    open(newunit=my_unit, file=trim(basename)//'_cell_type.txt', status='old')
-    read(my_unit, *) cell_type
-    close(my_unit)
-
-    select case (cell_type)
-    case ("triangle")
-       ug%cell_type = ug_triangle
-    case ("quad")
-       ug%cell_type = ug_quad
-    case ("tetra")
-       ug%cell_type = ug_tetra
-    case default
-       write(error_unit, *) "Cell type '", trim(cell_type), "' not supported"
-       error stop "Unsupported cell type"
-    end select
-
-    call read_array_float64_2d(trim(basename)//'_points.bin', ug%points)
-    call read_array_int32_2d(trim(basename)//'_cells.bin', ug%cells)
-    call read_array_int32_2d(trim(basename)//'_neighbors.bin', ug%neighbors)
-
-    ! Store information about mesh
-    ug%n_cells = size(ug%cells, 2)
-    ug%n_points_per_cell = size(ug%cells, 1)
-    ug%n_faces_per_cell = size(ug%cells, 1) ! works for triangle, quad, tetra
-    ug%n_points = size(ug%points, 2)
-
-    ! Convert to 1-based indexing
-    ug%cells = ug%cells + 1
-    ug%neighbors = ug%neighbors + 1
-
-    allocate(ug%values(ug%n_points, n_variables))
-
-    ! Read data on points
-    do n = 1, n_variables
-       call read_array_float64_1d(trim(basename) // '_point_data_' // &
-            trim(variable_names(n)) // '.bin', ug%n_points, ug%values(:, n))
-    end do
-
-    ! Store points for each cell
-    call set_cell_points(ug)
-
-    ! Store normal vectors for each cell face
-    call set_face_normal_vectors(ug)
-
-    ! Build kd-tree for efficient lookup of new points
-    call build_kdtree(ug)
-
-  end subroutine iu_read_grid
 
   ! Store points of each cell
   subroutine set_cell_points(ug)
@@ -194,7 +158,7 @@ contains
           end do
        end do
     case default
-       error stop 'Not implemented'
+       error stop "Not implemented"
     end select
 
   end subroutine set_face_normal_vectors
@@ -230,31 +194,32 @@ contains
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_cell
-    real(dp)                    :: values(ug_max_points_per_cell)
+    real(dp)                    :: point_data(ug_max_points_per_cell)
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
     i_cell = find_containing_cell(ug, r, i_cell)
-    values(1:ug%n_points_per_cell) = ug%values(ug%cells(:, i_cell), i_variable)
+    point_data(1:ug%n_points_per_cell) = &
+         ug%point_data(ug%cells(:, i_cell), i_variable)
 
     select case (ug%cell_type)
     case (ug_triangle)
        call interpolate_triangle(ug%cell_points(:, :, i_cell), &
-            values(1:ug%n_points_per_cell), r, var_at_r)
+            point_data(1:ug%n_points_per_cell), r, var_at_r)
     case (ug_quad)
        call interpolate_quad(ug%cell_points(:, :, i_cell), &
-            values(1:ug%n_points_per_cell), r, var_at_r)
+            point_data(1:ug%n_points_per_cell), r, var_at_r)
     case (ug_tetra)
        call interpolate_tetrahedron(ug%cell_points(:, :, i_cell), &
-            values(1:ug%n_points_per_cell), r, var_at_r)
+            point_data(1:ug%n_points_per_cell), r, var_at_r)
     case default
        error stop "Not implemented"
     end select
   end subroutine iu_interpolate_at
 
-  subroutine interpolate_triangle(points, values, r, res)
+  subroutine interpolate_triangle(points, point_data, r, res)
     real(dp), intent(in)  :: points(3, 3) ! vertices of the triangle
-    real(dp), intent(in)  :: values(3)    ! values at vertices
+    real(dp), intent(in)  :: point_data(3) ! point_data at vertices
     real(dp), intent(in)  :: r(3)         ! point for interpolation
     real(dp), intent(out) :: res          ! interpolated value
     real(dp)              :: area_full, areas(3)
@@ -268,14 +233,14 @@ contains
     areas(3) = norm2(cross_product(r - points(:, 1), r - points(:, 2)))
 
     ! Perform interpolation
-    res = sum(areas * values) / area_full
+    res = sum(areas * point_data) / area_full
   end subroutine interpolate_triangle
 
   ! Based on https://www.cdsimpson.net/2014/10/barycentric-coordinates.html
   ! https://stackoverflow.com/questions/38545520/barycentric-coordinates-of-a-tetrahedron
-  subroutine interpolate_tetrahedron(points, values, r, res)
+  subroutine interpolate_tetrahedron(points, point_data, r, res)
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
-    real(dp), intent(in)  :: values(4)    ! values at vertices
+    real(dp), intent(in)  :: point_data(4) ! point_data at vertices
     real(dp), intent(in)  :: r(3)         ! point for interpolation
     real(dp), intent(out) :: res          ! interpolated value
     real(dp)              :: weights(4), full_weight
@@ -296,16 +261,16 @@ contains
     full_weight = scalar_triple_product(v12, v13, v14)
 
     ! Perform interpolation
-    res = sum(weights * values) / full_weight
+    res = sum(weights * point_data) / full_weight
 
   end subroutine interpolate_tetrahedron
 
   ! Interpolate a quad element with four points at arbitary locations. The
   ! implementation is based on:
   ! https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/
-  subroutine interpolate_quad(points, values, r, res)
+  subroutine interpolate_quad(points, point_data, r, res)
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
-    real(dp), intent(in)  :: values(4)    ! values at vertices
+    real(dp), intent(in)  :: point_data(4) ! point_data at vertices
     real(dp), intent(in)  :: r(3)         ! point for interpolation
     real(dp), intent(out) :: res          ! interpolated value
 
@@ -345,8 +310,8 @@ contains
     end associate
 
     ! Perform bilinear interpolation using the found coefficients
-    tmp(1) = values(1) * (1 - coeff(1)) + values(2) * coeff(1)
-    tmp(2) = values(4) * (1 - coeff(1)) + values(3) * coeff(1)
+    tmp(1) = point_data(1) * (1 - coeff(1)) + point_data(2) * coeff(1)
+    tmp(2) = point_data(4) * (1 - coeff(1)) + point_data(3) * coeff(1)
     res = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
 
   end subroutine interpolate_quad
@@ -450,195 +415,76 @@ contains
 
   end subroutine get_cell_intersection
 
-  subroutine read_array_float64_1d(filename, array_size, array)
-    use iso_fortran_env, only: error_unit
+  subroutine iu_read_grid(filename, ug)
     character(len=*), intent(in) :: filename
-    integer, intent(in)          :: array_size
-    real(dp), intent(out)        :: array(array_size)
+    type(iu_grid_t), intent(out) :: ug
+    type(binda_t)                :: bfile
+    integer                      :: ix, n
 
-    integer :: my_unit, ndim, data_shape(1)
-    character(len=64) :: dtype_str
-    real(sp), allocatable :: sp_array(:)
+    call binda_open_file(filename, bfile)
+    call binda_read_header(bfile)
 
-    ! Open the binary file
-    open(newunit=my_unit, file=filename, form='unformatted', &
-         access='stream', status='old')
+    call binda_get_index(bfile, "cells", ix)
+    if (ix == -1) error stop "cells not found in binda file"
+    call binda_read_alloc_int32_2d(bfile, ix, ug%cells)
 
-    read(my_unit) dtype_str
-
-    read(my_unit) ndim
-    if (ndim /= 1) then
-       write(error_unit, *) ' Found ndim: ', ndim
-       error stop 'Wrong dimension, expected 1'
-    end if
-
-    read(my_unit) data_shape
-
-    if (data_shape(1) /= array_size) then
-       write(error_unit, *) ' Found data_shape: ', data_shape(1), &
-            ', expected: ', array_size
-       error stop 'Wrong data_shape'
-    end if
-
-    select case (dtype_str)
-    case ('float64')
-       read(my_unit) array
-    case ('float32')
-       allocate(sp_array(array_size))
-       read(my_unit) sp_array
-       array = sp_array
+    select case (bfile%metadata(ix))
+    case ("triangle")
+       ug%cell_type = ug_triangle
+    case ("quad")
+       ug%cell_type = ug_quad
+    case ("tetra")
+       ug%cell_type = ug_tetra
     case default
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected float64 or float32'
+       write(error_unit, *) "Cell type '", bfile%metadata(ix), &
+            "' not supported"
+       error stop "Unsupported cell type"
     end select
 
-    close(my_unit)
+    call binda_get_index(bfile, "points", ix)
+    if (ix == -1) error stop "points not found in binda file"
+    call binda_read_alloc_float64_2d(bfile, ix, ug%points)
 
-  end subroutine read_array_float64_1d
+    call binda_get_index(bfile, "cell_neighbors", ix)
+    if (ix == -1) error stop "cell_neighbors not found in binda file"
+    call binda_read_alloc_int32_2d(bfile, ix, ug%neighbors)
 
-  subroutine read_array_float64_2d(filename, array)
-    use iso_fortran_env, only: error_unit
-    character(len=*), intent(in) :: filename
-    real(dp), allocatable        :: array(:, :)
+    ! Store information about mesh
+    ug%n_cells = size(ug%cells, 2)
+    ug%n_points_per_cell = size(ug%cells, 1)
+    ug%n_faces_per_cell = size(ug%cells, 1) ! works for triangle, quad, tetra
+    ug%n_points = size(ug%points, 2)
 
-    integer :: my_unit, ndim, data_shape(2)
-    character(len=64) :: dtype_str
-    real(sp), allocatable :: sp_array(:, :)
+    ! Convert to 1-based indexing
+    ug%cells = ug%cells + 1
+    ug%neighbors = ug%neighbors + 1
 
-    ! Open the binary file
-    open(newunit=my_unit, file=filename, form='unformatted', &
-         access='stream', status='old')
+    ug%n_point_data = count(bfile%name == "point_data")
+    allocate(ug%point_data(ug%n_points, ug%n_point_data))
+    allocate(ug%point_data_names(ug%n_point_data))
 
-    read(my_unit) dtype_str
-
-    read(my_unit) ndim
-    if (ndim /= 2) then
-       write(error_unit, *) ' Found ndim: ', ndim
-       error stop 'Wrong dimension, expected 2'
-    end if
-
-    read(my_unit) data_shape
-    allocate(array(data_shape(2), data_shape(1)))
-
-    select case (dtype_str)
-    case ('float64')
-       read(my_unit) array
-    case ('float32')
-       allocate(sp_array(data_shape(2), data_shape(1)))
-       read(my_unit) sp_array
-       array = sp_array
-    case default
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected float64 or float32'
-    end select
-
-    close(my_unit)
-
-  end subroutine read_array_float64_2d
-
-  subroutine read_array_int32_2d(filename, array)
-    use iso_fortran_env, only: error_unit, int64
-    character(len=*), intent(in) :: filename
-    integer, allocatable         :: array(:, :)
-
-    integer :: my_unit, ndim, data_shape(2)
-    character(len=64) :: dtype_str
-    integer(int64), allocatable :: int64_array(:, :)
-
-    ! Open the binary file
-    open(newunit=my_unit, file=filename, form='unformatted', &
-         access='stream', status='old')
-
-    read(my_unit) dtype_str
-
-    read(my_unit) ndim
-    if (ndim /= 2) then
-       write(error_unit, *) ' Found ndim: ', ndim
-       error stop 'Wrong dimension, expected 2'
-    end if
-
-    read(my_unit) data_shape
-    allocate(array(data_shape(2), data_shape(1)))
-
-    select case (dtype_str)
-    case ('int64')
-       allocate(int64_array(data_shape(2), data_shape(1)))
-       read(my_unit) int64_array
-       array = int(int64_array)
-    case ('int32')
-       read(my_unit) array
-    case default
-       write(error_unit, *) ' Found dtype: ', trim(dtype_str)
-       error stop 'Wrong dtype, expected float64 or float32'
-    end select
-
-    close(my_unit)
-
-  end subroutine read_array_int32_2d
-
-  subroutine read_binary_data(filename)
-    character(len=*), intent(in) :: filename
-    integer                      :: my_unit
-    integer                      :: i
-    character(len=128)           :: name, data_type
-    integer(int64)               :: n_entries, total_header_size
-    integer(int64)               :: offset, ndim, shape(8), old_pos
-    real(dp), allocatable        :: data(:)
-    real(sp) :: tmp_float32(27)
-
-    ! Open the file
-    open(newunit=my_unit, file=filename, status='old', &
-         form='unformatted', access='stream')
-
-    ! Read the number of entries and total header size
-    read(my_unit) n_entries
-    read(my_unit) total_header_size
-
-    print *, n_entries, total_header_size
-
-    ! Loop over each entry
-    do i = 1, n_entries
-       ! Read entry metadata
-       read(my_unit) name
-       read(my_unit) data_type
-       read(my_unit) ndim
-       read(my_unit) shape
-       read(my_unit) offset
-
-       ! ! Allocate memory for data corresponding to this entry
-       ! allocate(data(entry_size))
-
-       ! ! Move file pointer to the offset and read the binary data
-       ! inquire(unit=my_unit, size=unit_size(my_unit))  ! Get unit size
-       ! find_offset = total_header_size + offset
-       ! position(unit=my_unit) = find_offset
-       ! read(my_unit) data  ! Read data into the array
-
-       ! Optionally: Print out information (e.g., name, data type, and retrieved data)
-       print *, "Name: ", trim(name)
-       print *, "Data type: ", trim(data_type)
-       print *, "ndim: ", ndim
-       print *, "shape: ", shape
-       print *, "offset:", offset
-
-       inquire(unit=my_unit, pos=file_pos)
-       if (data_type == 'float32') then
-          print *, offset, total_header_size
-          read(my_unit, pos=offset+1) tmp_float32
-          print *, tmp_float32
-          stop
-       else
-          print *, "NOT float32"
+    ! Read point data
+    n = 0
+    do ix = 1, bfile%n_entries
+       if (bfile%name(ix) == "point_data") then
+          n = n + 1
+          ug%point_data_names(n) = bfile%metadata(ix)
+          call binda_read_float64_1d(bfile, ix, &
+               ug%n_points, ug%point_data(:, n))
        end if
-
-       ! write(*, *) "Data: ", data
-
-       ! Deallocate after usage (if necessary)
-       ! deallocate(data)
     end do
 
-    ! Close the file
-    close(unit=my_unit)
-  end subroutine read_binary_data
+    call binda_close_file(bfile)
+
+    ! Store points for each cell
+    call set_cell_points(ug)
+
+    ! Store normal vectors for each cell face
+    call set_face_normal_vectors(ug)
+
+    ! Build kd-tree for efficient lookup of new points
+    call build_kdtree(ug)
+
+  end subroutine iu_read_grid
 
 end module m_interp_unstructured

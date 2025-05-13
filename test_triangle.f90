@@ -4,13 +4,9 @@ program test_triangle
 
   implicit none
   integer, parameter :: dp = kind(0.0d0)
-  character(len=100) :: fname
   type(iu_grid_t)    :: ug
 
-  fname = 'test_data/triangle'
-
-  call read_binary_data(trim(fname) // '.bin')
-  call iu_read_grid(trim(fname), 1, ['Polynomial'], ug)
+  call iu_read_grid('test_data/triangle.binda', ug)
 
   call test_interpolation(ug, 1000)
 
@@ -20,11 +16,14 @@ contains
     type(iu_grid_t), intent(inout) :: ug
     integer, intent(in)            :: n_samples
 
-    integer               :: n
+    integer               :: n, ivar
     real(dp), allocatable :: r_samples(:, :), res(:)
     integer, allocatable  :: i_cell(:)
     real(dp)              :: rmin(3), rmax(3), difference
     real(dp), parameter   :: threshold = 1e-14_dp
+
+    call iu_get_point_data_index(ug, 'Polynomial', ivar)
+    if (ivar == -1) error stop "Point data 'Polynomial' not found"
 
     allocate(r_samples(3, n_samples), res(n_samples), i_cell(n_samples))
     rmin = minval(ug%points, dim=2)
@@ -38,7 +37,7 @@ contains
     i_cell(:) = 0
 
     do n = 1, n_samples
-       call iu_interpolate_at(ug, r_samples(:, n), 1, res(n), i_cell(n))
+       call iu_interpolate_at(ug, r_samples(:, n), ivar, res(n), i_cell(n))
        difference = abs(res(n) - solution(r_samples(:, n)))
 
        if (difference > threshold) then

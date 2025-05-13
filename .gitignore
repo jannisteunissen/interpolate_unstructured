@@ -7,3 +7,4 @@
 *.o
 *.mod
 /libinterp_unstructured.a
+*.binda
