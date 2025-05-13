@@ -48,6 +48,7 @@ module m_interp_unstructured
   public :: iu_read_grid
   public :: iu_get_point_data_index
   public :: iu_interpolate_at
+  public :: iu_interpolate_scalar_at
 
 contains
 
@@ -185,66 +186,95 @@ contains
     end if
   end function find_containing_cell
 
-  ! Interpolate variable with index i_variable at location r
-  subroutine iu_interpolate_at(ug, r, i_variable, var_at_r, i_cell)
+  ! Interpolate scalar at location r
+  subroutine iu_interpolate_scalar_at(ug, r, i_var, var_at_r, i_cell)
     type(iu_grid_t), intent(in) :: ug
-    real(dp), intent(in)        :: r(3)         ! Interpolate at this point
-    integer, intent(in)         :: i_variable   ! Index of variable
-    real(dp), intent(out)       :: var_at_r     ! Result at r
+    real(dp), intent(in)        :: r(3)     ! Interpolate at this point
+    integer, intent(in)         :: i_var    ! Index of variables
+    real(dp), intent(out)       :: var_at_r ! Result at r
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_cell
-    real(dp)                    :: point_data(ug_max_points_per_cell)
+    real(dp)                    :: tmp(1)
+
+    call iu_interpolate_at(ug, r, 1, [i_var], tmp, i_cell)
+    var_at_r = tmp(1)
+  end subroutine iu_interpolate_scalar_at
+
+  ! Interpolate multiple variables at location r
+  subroutine iu_interpolate_at(ug, r, n_vars, i_vars, var_at_r, i_cell)
+    type(iu_grid_t), intent(in) :: ug
+    real(dp), intent(in)        :: r(3)             ! Interpolate at this point
+    integer, intent(in)         :: n_vars           ! Number of variables to interpolate
+    integer, intent(in)         :: i_vars(n_vars)   ! Indices of variables
+    real(dp), intent(out)       :: var_at_r(n_vars) ! Result at r
+    ! On input: guess for nearby cell. Less than 1 means not set.
+    ! On output: cell containing the point r.
+    integer, intent(inout)      :: i_cell
+    integer                     :: n
+    real(dp)                    :: point_data(ug_max_points_per_cell, n_vars)
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
     i_cell = find_containing_cell(ug, r, i_cell)
-    point_data(1:ug%n_points_per_cell) = &
-         ug%point_data(ug%cells(:, i_cell), i_variable)
+
+    do n = 1, n_vars
+       point_data(1:ug%n_points_per_cell, n) = &
+            ug%point_data(ug%cells(:, i_cell), i_vars(n))
+    end do
 
     select case (ug%cell_type)
     case (ug_triangle)
-       call interpolate_triangle(ug%cell_points(:, :, i_cell), &
-            point_data(1:ug%n_points_per_cell), r, var_at_r)
+       call interpolate_triangle(n_vars, ug%cell_points(:, :, i_cell), &
+            point_data, r, var_at_r)
     case (ug_quad)
-       call interpolate_quad(ug%cell_points(:, :, i_cell), &
-            point_data(1:ug%n_points_per_cell), r, var_at_r)
+       call interpolate_quad(n_vars, ug%cell_points(:, :, i_cell), &
+            point_data, r, var_at_r)
     case (ug_tetra)
-       call interpolate_tetrahedron(ug%cell_points(:, :, i_cell), &
-            point_data(1:ug%n_points_per_cell), r, var_at_r)
+       call interpolate_tetrahedron(n_vars, ug%cell_points(:, :, i_cell), &
+            point_data, r, var_at_r)
     case default
        error stop "Not implemented"
     end select
+
   end subroutine iu_interpolate_at
 
-  subroutine interpolate_triangle(points, point_data, r, res)
-    real(dp), intent(in)  :: points(3, 3) ! vertices of the triangle
-    real(dp), intent(in)  :: point_data(3) ! point_data at vertices
-    real(dp), intent(in)  :: r(3)         ! point for interpolation
-    real(dp), intent(out) :: res          ! interpolated value
-    real(dp)              :: area_full, areas(3)
+  subroutine interpolate_triangle(n_vars, points, point_data, r, res)
+    integer, intent(in)   :: n_vars                ! Number of variables
+    real(dp), intent(in)  :: points(3, 3)          ! vertices of the triangle
+    ! point_data at vertices
+    real(dp), intent(in)  :: point_data(n_vars, ug_max_points_per_cell)
+    real(dp), intent(in)  :: r(3)                  ! point for interpolation
+    real(dp), intent(out) :: res(n_vars)           ! interpolated value
+    real(dp)              :: inv_area, areas(3)
+    integer               :: n
 
     ! Compute areas to find barycentric coordinates. The factors 0.5 cancel in
     ! the final computation and have been left out.
-    area_full = norm2(cross_product(points(:, 2) - points(:, 1), &
+    inv_area = 1/norm2(cross_product(points(:, 2) - points(:, 1), &
          points(:, 3) - points(:, 1)))
     areas(1) = norm2(cross_product(r - points(:, 2), r - points(:, 3)))
     areas(2) = norm2(cross_product(r - points(:, 3), r - points(:, 1)))
     areas(3) = norm2(cross_product(r - points(:, 1), r - points(:, 2)))
 
     ! Perform interpolation
-    res = sum(areas * point_data) / area_full
+    do n = 1, n_vars
+       res(n) = sum(point_data(1:3, n) * areas) * inv_area
+    end do
   end subroutine interpolate_triangle
 
   ! Based on https://www.cdsimpson.net/2014/10/barycentric-coordinates.html
   ! https://stackoverflow.com/questions/38545520/barycentric-coordinates-of-a-tetrahedron
-  subroutine interpolate_tetrahedron(points, point_data, r, res)
-    real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
-    real(dp), intent(in)  :: point_data(4) ! point_data at vertices
-    real(dp), intent(in)  :: r(3)         ! point for interpolation
-    real(dp), intent(out) :: res          ! interpolated value
-    real(dp)              :: weights(4), full_weight
+  subroutine interpolate_tetrahedron(n_vars, points, point_data, r, res)
+    integer, intent(in)    :: n_vars       ! Number of variables
+    real(dp), intent(in)   :: points(3, 4) ! vertices of the quad
+    ! point_data at vertices
+    real(dp), intent(in)   :: point_data(n_vars, ug_max_points_per_cell)
+    real(dp), intent(in)   :: r(3)         ! point for interpolation
+    real(dp), intent(out)  :: res(n_vars)  ! interpolated value
+    real(dp)               :: weights(4), inv_weight
     real(dp), dimension(3) :: v1r, v2r, v12, v13, v14, v23, v24
+    integer                :: n
 
     v1r = r - points(:, 1)
     v2r = r - points(:, 2)
@@ -258,25 +288,29 @@ contains
     weights(2) = scalar_triple_product(v1r, v13, v14)
     weights(3) = scalar_triple_product(v1r, v14, v12)
     weights(4) = scalar_triple_product(v1r, v12, v13)
-    full_weight = scalar_triple_product(v12, v13, v14)
+    inv_weight = 1/scalar_triple_product(v12, v13, v14)
 
     ! Perform interpolation
-    res = sum(weights * point_data) / full_weight
+    do n = 1, n_vars
+       res(n) = sum(point_data(1:4, n) * weights) * inv_weight
+    end do
 
   end subroutine interpolate_tetrahedron
 
   ! Interpolate a quad element with four points at arbitary locations. The
   ! implementation is based on:
   ! https://www.reedbeta.com/blog/quadrilateral-interpolation-part-2/
-  subroutine interpolate_quad(points, point_data, r, res)
+  subroutine interpolate_quad(n_vars, points, point_data, r, res)
+    integer, intent(in)   :: n_vars       ! Number of variables
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
-    real(dp), intent(in)  :: point_data(4) ! point_data at vertices
+    ! point_data at vertices
+    real(dp), intent(in)  :: point_data(n_vars, ug_max_points_per_cell)
     real(dp), intent(in)  :: r(3)         ! point for interpolation
-    real(dp), intent(out) :: res          ! interpolated value
+    real(dp), intent(out) :: res(n_vars)  ! interpolated value
 
     real(dp) :: q(3), b1(3), b2(3), b3(3), denom(3)
     real(dp) :: A, B, C, discrim, coeff(2), tmp(2)
-    integer  :: max_dim(1)
+    integer  :: max_dim(1), n
     real(dp), parameter :: tiny_value = 1e-20_dp
 
     ! Below, points(:,1) is the first neighbor of points(:,1), and points(:,4)
@@ -310,9 +344,11 @@ contains
     end associate
 
     ! Perform bilinear interpolation using the found coefficients
-    tmp(1) = point_data(1) * (1 - coeff(1)) + point_data(2) * coeff(1)
-    tmp(2) = point_data(4) * (1 - coeff(1)) + point_data(3) * coeff(1)
-    res = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
+    do n = 1, n_vars
+       tmp(1) = point_data(n, 1) * (1 - coeff(1)) + point_data(n, 2) * coeff(1)
+       tmp(2) = point_data(n, 4) * (1 - coeff(1)) + point_data(n, 3) * coeff(1)
+       res(n) = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
+    end do
 
   end subroutine interpolate_quad
 

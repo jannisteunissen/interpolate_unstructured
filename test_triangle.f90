@@ -37,7 +37,8 @@ contains
     i_cell(:) = 0
 
     do n = 1, n_samples
-       call iu_interpolate_at(ug, r_samples(:, n), ivar, res(n), i_cell(n))
+       call iu_interpolate_scalar_at(ug, r_samples(:, n), &
+            ivar, res(n), i_cell(n))
        difference = abs(res(n) - solution(r_samples(:, n)))
 
        if (difference > threshold) then

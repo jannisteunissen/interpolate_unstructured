@@ -19,7 +19,7 @@ contains
     integer, allocatable           :: i_cell(:)
     real(dp)                       :: rmin(3), rmax(3), domain_size(3)
     real(dp)                       :: cpu_time, dt
-    integer                        :: n
+    integer                        :: n, ivar
     integer(int64)                 :: t_start, t_end, count_rate
 
     allocate(r_samples(3, n_samples), res(n_samples), i_cell(n_samples))
@@ -40,11 +40,13 @@ contains
        call random_number(velocity(:, n))
     end do
 
+    ivar = 1
     i_cell(:) = 0
 
     call system_clock(t_start, count_rate)
     do n = 1, n_samples
-       call iu_interpolate_at(ug, r_samples(:, n), 1, res(n), i_cell(n))
+       call iu_interpolate_scalar_at(ug, r_samples(:, n), &
+            ivar, res(n), i_cell(n))
     end do
     call system_clock(t_end, count_rate)
 
@@ -57,7 +59,8 @@ contains
 
     call system_clock(t_start, count_rate)
     do n = 1, n_samples
-       call iu_interpolate_at(ug, r_samples(:, n), 1, res(n), i_cell(n))
+       call iu_interpolate_scalar_at(ug, r_samples(:, n), &
+            ivar, res(n), i_cell(n))
     end do
     call system_clock(t_end, count_rate)
 
