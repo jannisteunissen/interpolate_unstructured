@@ -111,18 +111,6 @@ class BindaWriter:
             f.write(self.binary_data_storage)
 
 
-def write_array_to_binary(array, fh):
-    """Write array to binary file"""
-    # Use fixed size string of length 64
-    dtype_ascii = f'{str(array.dtype):<64}'.encode('ascii')
-    shape_int32 = np.array(array.shape, dtype=np.int32)
-    ndim_int32 = np.asarray(array.ndim, dtype=np.int32)
-    fh.write(dtype_ascii)
-    fh.write(ndim_int32)
-    fh.write(shape_int32)
-    fh.write(array)
-
-
 def get_cell_neighbors(cells, n_points_face):
     """Determine neighbors for each cell, with cell_neighbor[i_cell, i_vertex]
     being the index of the neighbor connected to the face with index i_vertex,
@@ -167,25 +155,13 @@ parser.add_argument('infile', type=str, help='Input file')
 parser.add_argument('-output_basename', type=str, help='Basename for output')
 args = parser.parse_args()
 
-mesh = meshio.read(args.infile)
-binstore = BindaWriter()
-
 if args.output_basename is None:
     args.output_basename = os.path.splitext(args.infile)[0]
 
-with open(args.output_basename + '_points.bin', 'wb') as f:
-    write_array_to_binary(mesh.points, f)
-    binstore.add_entry('points', mesh.points)
+mesh = meshio.read(args.infile)
 
-with open(args.output_basename + '_cell_type.txt', 'w') as f:
-    if len(mesh.cells) > 1:
-        raise ValueError('Mixed cell types not yet implemented')
-
-    f.write(mesh.cells[0].type + '\n')
-
-with open(args.output_basename + '_cells.bin', 'wb') as f:
-    write_array_to_binary(mesh.cells[0].data, f)
-    binstore.add_entry('cells', mesh.cells[0].data, mesh.cells[0].type)
+if len(mesh.cells) > 1:
+    raise ValueError('Mixed cell types not yet implemented')
 
 if mesh.cells[0].type in ['triangle', 'quad']:
     n_points_per_face = 2
@@ -196,14 +172,14 @@ else:
 
 cell_neighbors = get_cell_neighbors(mesh.cells[0].data, n_points_per_face)
 
-with open(args.output_basename + '_neighbors.bin', 'wb') as f:
-    write_array_to_binary(cell_neighbors, f)
-    binstore.add_entry('cell_neighbors', cell_neighbors)
+binstore = BindaWriter()
+
+binstore.add_entry('points', mesh.points)
+binstore.add_entry('cells', mesh.cells[0].data, mesh.cells[0].type)
+binstore.add_entry('cell_neighbors', cell_neighbors)
 
 for var in mesh.point_data:
-    with open(args.output_basename + f'_point_data_{var}.bin', 'wb') as f:
-        write_array_to_binary(mesh.point_data[var], f)
-        binstore.add_entry(f'point_data', mesh.point_data[var], var)
+    binstore.add_entry('point_data', mesh.point_data[var], var)
 
 fname = args.output_basename + '.binda'
 binstore.write_to_file(fname)
