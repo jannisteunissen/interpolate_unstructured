@@ -28,6 +28,9 @@ module m_interp_unstructured
      integer :: n_point_data
      integer :: n_cell_data
 
+     real(dp) :: rmin(3)
+     real(dp) :: rmax(3)
+
      real(dp), allocatable :: points(:, :)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
@@ -185,7 +188,8 @@ contains
 
   end subroutine set_face_normal_vectors
 
-  ! Find cell containing r, optionally using a nearby cell as a starting point
+  ! Find cell containing r, optionally using a nearby cell as a starting
+  ! point. Returns a value less than one if the cell is not found.
   integer function iu_get_cell(ug, r, i_guess) result(i_cell)
     type(iu_grid_t), intent(in) :: ug
     real(dp), intent(in)        :: r(3)
@@ -200,11 +204,6 @@ contains
     r0 = sum(ug%cell_points(:, :, i_guess), dim=2) / ug%n_points_per_cell
 
     call get_cell_through_neighbors(ug, r0, r, i_guess, i_cell)
-
-    if (i_cell < 1) then
-       write(error_unit, *) "ERROR: cannot find cell containing", r
-       error stop "Point is probably outside domain"
-    end if
   end function iu_get_cell
 
   ! Get the value of cell data at the cell that contains r
@@ -215,10 +214,10 @@ contains
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_guess
-    real(dp), intent(out)       :: res ! Result
+    real(dp), intent(inout)     :: res ! Result
 
     i_guess = iu_get_cell(ug, r, i_guess)
-    res = ug%cell_data(i_guess, i_var)
+    if (i_guess >= 1) res = ug%cell_data(i_guess, i_var)
   end subroutine iu_get_cell_scalar_at
 
   ! Interpolate scalar at location r
@@ -242,7 +241,7 @@ contains
     real(dp), intent(in)        :: r(3)             ! Interpolate at this point
     integer, intent(in)         :: n_vars           ! Number of variables to interpolate
     integer, intent(in)         :: i_vars(n_vars)   ! Indices of variables
-    real(dp), intent(out)       :: var_at_r(n_vars) ! Result at r
+    real(dp), intent(inout)     :: var_at_r(n_vars) ! Result at r
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_cell
@@ -252,6 +251,9 @@ contains
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
     i_cell = iu_get_cell(ug, r, i_cell)
+
+    ! Exit if cell not found
+    if (i_cell <= 0) return
 
     do n = 1, n_vars
        point_data(1:ug%n_points_per_cell, n) = &
@@ -278,7 +280,7 @@ contains
     integer, intent(in)   :: n_vars                ! Number of variables
     real(dp), intent(in)  :: points(3, 3)          ! vertices of the triangle
     ! point_data at vertices
-    real(dp), intent(in)  :: point_data(n_vars, ug_max_points_per_cell)
+    real(dp), intent(in)  :: point_data(ug_max_points_per_cell, n_vars)
     real(dp), intent(in)  :: r(3)                  ! point for interpolation
     real(dp), intent(out) :: res(n_vars)           ! interpolated value
     real(dp)              :: inv_area, areas(3)
@@ -304,7 +306,7 @@ contains
     integer, intent(in)    :: n_vars       ! Number of variables
     real(dp), intent(in)   :: points(3, 4) ! vertices of the quad
     ! point_data at vertices
-    real(dp), intent(in)   :: point_data(n_vars, ug_max_points_per_cell)
+    real(dp), intent(in)   :: point_data(ug_max_points_per_cell, n_vars)
     real(dp), intent(in)   :: r(3)         ! point for interpolation
     real(dp), intent(out)  :: res(n_vars)  ! interpolated value
     real(dp)               :: weights(4), inv_weight
@@ -339,7 +341,7 @@ contains
     integer, intent(in)   :: n_vars       ! Number of variables
     real(dp), intent(in)  :: points(3, 4) ! vertices of the triangle
     ! point_data at vertices
-    real(dp), intent(in)  :: point_data(n_vars, ug_max_points_per_cell)
+    real(dp), intent(in)  :: point_data(ug_max_points_per_cell, n_vars)
     real(dp), intent(in)  :: r(3)         ! point for interpolation
     real(dp), intent(out) :: res(n_vars)  ! interpolated value
 
@@ -380,8 +382,8 @@ contains
 
     ! Perform bilinear interpolation using the found coefficients
     do n = 1, n_vars
-       tmp(1) = point_data(n, 1) * (1 - coeff(1)) + point_data(n, 2) * coeff(1)
-       tmp(2) = point_data(n, 4) * (1 - coeff(1)) + point_data(n, 3) * coeff(1)
+       tmp(1) = point_data(1, n) * (1 - coeff(1)) + point_data(2, n) * coeff(1)
+       tmp(2) = point_data(4, n) * (1 - coeff(1)) + point_data(3, n) * coeff(1)
        res(n) = tmp(1) * (1 - coeff(2)) + tmp(2) * coeff(2)
     end do
 
@@ -486,9 +488,11 @@ contains
 
   end subroutine get_cell_intersection
 
-  subroutine iu_read_grid(filename, ug)
+  subroutine iu_read_grid(filename, ug, coord_scale_factor)
     character(len=*), intent(in) :: filename
     type(iu_grid_t), intent(out) :: ug
+    ! Scale coordinates by this factor
+    real(dp), intent(in), optional :: coord_scale_factor
     type(binda_t)                :: bfile
     integer                      :: ix, i_point_data, i_cell_data
 
@@ -520,11 +524,17 @@ contains
     if (ix == -1) error stop "cell_neighbors not found in binda file"
     call binda_read_alloc_int32_2d(bfile, ix, ug%neighbors)
 
+    if (present(coord_scale_factor)) then
+       ug%points(:, :) = ug%points(:, :) * coord_scale_factor
+    end if
+
     ! Store information about mesh
     ug%n_cells = size(ug%cells, 2)
     ug%n_points_per_cell = size(ug%cells, 1)
     ug%n_faces_per_cell = size(ug%cells, 1) ! works for triangle, quad, tetra
     ug%n_points = size(ug%points, 2)
+    ug%rmin = minval(ug%points, dim=2)
+    ug%rmax = maxval(ug%points, dim=2)
 
     ! Convert to 1-based indexing
     ug%cells = ug%cells + 1
