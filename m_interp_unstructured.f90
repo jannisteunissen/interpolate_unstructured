@@ -26,6 +26,7 @@ module m_interp_unstructured
      integer :: n_faces_per_cell
      integer :: cell_type
      integer :: n_point_data
+     integer :: n_cell_data
 
      real(dp), allocatable :: points(:, :)
      integer, allocatable  :: cells(:, :)
@@ -33,9 +34,13 @@ module m_interp_unstructured
      integer, allocatable  :: neighbors(:, :)
      real(dp), allocatable :: cell_face_normals(:, :, :)
      real(dp), allocatable :: point_data(:, :)
+     real(dp), allocatable :: cell_data(:, :)
 
-     ! Names of the variables
+     ! Names of the point data variables
      character(len=128), allocatable :: point_data_names(:)
+
+     ! Names of the cell data variables
+     character(len=128), allocatable :: cell_data_names(:)
 
      ! kd-tree for searching a nearby cell
      type(kdtree2) :: tree
@@ -47,7 +52,9 @@ module m_interp_unstructured
   ! Public methods
   public :: iu_read_grid
   public :: iu_get_point_data_index
+  public :: iu_get_cell_data_index
   public :: iu_get_cell
+  public :: iu_get_cell_scalar_at
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
 
@@ -65,6 +72,19 @@ contains
 
     if (ix == ug%n_point_data + 1) ix = -1
   end subroutine iu_get_point_data_index
+
+  ! Find index of cell data variable, -1 if not present
+  subroutine iu_get_cell_data_index(ug, name, ix)
+    type(iu_grid_t), intent(in)  :: ug
+    character(len=*), intent(in) :: name
+    integer, intent(out)         :: ix
+
+    do ix = 1, ug%n_cell_data
+       if (ug%cell_data_names(ix) == name) exit
+    end do
+
+    if (ix == ug%n_cell_data + 1) ix = -1
+  end subroutine iu_get_cell_data_index
 
   ! Create kd-tree to efficiently find a (nearby) cell for a new search at a
   ! new location
@@ -186,6 +206,20 @@ contains
        error stop "Point is probably outside domain"
     end if
   end function iu_get_cell
+
+  ! Get the value of cell data at the cell that contains r
+  subroutine iu_get_cell_scalar_at(ug, r, i_var, i_guess, res)
+    type(iu_grid_t), intent(in) :: ug
+    real(dp), intent(in)        :: r(3)  ! Location
+    integer, intent(in)         :: i_var ! Index of cell data variable
+    ! On input: guess for nearby cell. Less than 1 means not set.
+    ! On output: cell containing the point r.
+    integer, intent(inout)      :: i_guess
+    real(dp), intent(out)       :: res ! Result
+
+    i_guess = iu_get_cell(ug, r, i_guess)
+    res = ug%cell_data(i_guess, i_var)
+  end subroutine iu_get_cell_scalar_at
 
   ! Interpolate scalar at location r
   subroutine iu_interpolate_scalar_at(ug, r, i_var, var_at_r, i_cell)
@@ -456,7 +490,7 @@ contains
     character(len=*), intent(in) :: filename
     type(iu_grid_t), intent(out) :: ug
     type(binda_t)                :: bfile
-    integer                      :: ix, n
+    integer                      :: ix, i_point_data, i_cell_data
 
     call binda_open_file(filename, bfile)
     call binda_read_header(bfile)
@@ -496,18 +530,31 @@ contains
     ug%cells = ug%cells + 1
     ug%neighbors = ug%neighbors + 1
 
+    ! Allocate storage for point data
     ug%n_point_data = count(bfile%name == "point_data")
     allocate(ug%point_data(ug%n_points, ug%n_point_data))
     allocate(ug%point_data_names(ug%n_point_data))
 
-    ! Read point data
-    n = 0
+    ! Allocate storage for cell data
+    ug%n_cell_data = count(bfile%name == "cell_data")
+    allocate(ug%cell_data(ug%n_cells, ug%n_cell_data))
+    allocate(ug%cell_data_names(ug%n_cell_data))
+
+    ! Read point and cell data
+    i_point_data = 0
+    i_cell_data = 0
+
     do ix = 1, bfile%n_entries
        if (bfile%name(ix) == "point_data") then
-          n = n + 1
-          ug%point_data_names(n) = bfile%metadata(ix)
+          i_point_data = i_point_data + 1
+          ug%point_data_names(i_point_data) = bfile%metadata(ix)
           call binda_read_float64_1d(bfile, ix, &
-               ug%n_points, ug%point_data(:, n))
+               ug%n_points, ug%point_data(:, i_point_data))
+       else if (bfile%name(ix) == "cell_data") then
+          i_cell_data = i_cell_data + 1
+          ug%cell_data_names(i_cell_data) = bfile%metadata(ix)
+          call binda_read_float64_1d(bfile, ix, &
+               ug%n_cells, ug%cell_data(:, i_cell_data))
        end if
     end do
 
