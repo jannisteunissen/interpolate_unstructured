@@ -179,7 +179,14 @@ binstore.add_entry('cells', mesh.cells[0].data, mesh.cells[0].type)
 binstore.add_entry('cell_neighbors', cell_neighbors)
 
 for var in mesh.point_data:
-    binstore.add_entry('point_data', mesh.point_data[var], var)
+    clean_name = var.replace(',', '')
+    binstore.add_entry('point_data', mesh.point_data[var], clean_name)
+    print('Storing point data:', clean_name)
+
+for var in mesh.cell_data:
+    clean_name = var.replace(',', '')
+    binstore.add_entry('cell_data', mesh.cell_data[var], clean_name)
+    print('Storing cell data: ', clean_name)
 
 fname = args.output_basename + '.binda'
 binstore.write_to_file(fname)
