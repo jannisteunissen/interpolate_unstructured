@@ -9,9 +9,10 @@ module m_interp_unstructured
   integer, parameter :: dp = kind(0.0d0)
   integer, parameter :: sp = kind(0.0e0)
 
-  integer, parameter :: ug_triangle = 1
-  integer, parameter :: ug_quad = 2
-  integer, parameter :: ug_tetra = 3
+  integer, parameter :: iu_triangle = 1
+  integer, parameter :: iu_quad = 2
+  integer, parameter :: iu_tetra = 3
+  integer, parameter :: iu_ndim_cell_type(3) = [2, 2, 3]
 
   integer, parameter :: ug_max_points_per_cell = 4
 
@@ -51,6 +52,8 @@ module m_interp_unstructured
 
   ! Public types
   public :: iu_grid_t
+  public :: iu_triangle, iu_quad, iu_tetra
+  public :: iu_ndim_cell_type
 
   ! Public methods
   public :: iu_read_grid
@@ -115,6 +118,13 @@ contains
 
     call kdtree2_n_nearest(ug%tree, r, 1, res)
     i_cell = res(1)%idx
+
+    if (i_cell < 1 .or. i_cell > ug%n_cells) then
+       write(error_unit, *) "r = ", r
+       write(error_unit, *) "i_cell = ", i_cell
+       error stop "Error in kdtree search"
+    end if
+
   end function find_nearby_cell_kdtree
 
   ! Store points of each cell
@@ -141,7 +151,7 @@ contains
     allocate(ug%cell_face_normals(3, ug%n_points_per_cell, ug%n_cells))
 
     select case (ug%cell_type)
-    case (ug_triangle, ug_quad)
+    case (iu_triangle, iu_quad)
        do n = 1, ug%n_cells
           center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
 
@@ -163,7 +173,7 @@ contains
              ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
           end do
        end do
-    case (ug_tetra)
+    case (iu_tetra)
        do n = 1, ug%n_cells
           center = sum(ug%cell_points(:, :, n), dim=2) / ug%n_points_per_cell
 
@@ -261,13 +271,13 @@ contains
     end do
 
     select case (ug%cell_type)
-    case (ug_triangle)
+    case (iu_triangle)
        call interpolate_triangle(n_vars, ug%cell_points(:, :, i_cell), &
             point_data, r, var_at_r)
-    case (ug_quad)
+    case (iu_quad)
        call interpolate_quad(n_vars, ug%cell_points(:, :, i_cell), &
             point_data, r, var_at_r)
-    case (ug_tetra)
+    case (iu_tetra)
        call interpolate_tetrahedron(n_vars, ug%cell_points(:, :, i_cell), &
             point_data, r, var_at_r)
     case default
@@ -505,11 +515,11 @@ contains
 
     select case (bfile%metadata(ix))
     case ("triangle")
-       ug%cell_type = ug_triangle
+       ug%cell_type = iu_triangle
     case ("quad")
-       ug%cell_type = ug_quad
+       ug%cell_type = iu_quad
     case ("tetra")
-       ug%cell_type = ug_tetra
+       ug%cell_type = iu_tetra
     case default
        write(error_unit, *) "Cell type '", bfile%metadata(ix), &
             "' not supported"
