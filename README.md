@@ -7,8 +7,18 @@ This library can be used to efficiently interpolate on unstructured grids. Two a
 
 # Supported cell types
 
-* Triangles (2d)
+* Triangles (2D)
+* Quads (2D)
+* Tetrahedra (3D)
 
-# Compilation
+# Installation
 
-TODO
+    git clone <url>
+    cd interpolate_unstructured
+    git submodule init
+    git submodule update
+
+# Usage
+
+See the included examples.
+
