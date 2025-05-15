@@ -59,6 +59,7 @@ module m_interp_unstructured
   public :: iu_read_grid
   public :: iu_get_point_data_index
   public :: iu_get_cell_data_index
+  public :: iu_get_cell_center
   public :: iu_get_cell
   public :: iu_get_cell_scalar_at
   public :: iu_interpolate_at
@@ -101,12 +102,18 @@ contains
 
     allocate(cell_centers(3, ug%n_cells))
     do n = 1, ug%n_cells
-       cell_centers(:, n) = sum(ug%cell_points(:, :, n), dim=2) / &
-            ug%n_points_per_cell
+       cell_centers(:, n) = iu_get_cell_center(ug, n)
     end do
 
     ug%tree = kdtree2_create(cell_centers, sort=.false., rearrange=.false.)
   end subroutine build_kdtree
+
+  pure function iu_get_cell_center(ug, i_cell) result(center)
+    type(iu_grid_t), intent(in) :: ug
+    integer, intent(in)         :: i_cell
+    real(dp)                    :: center(3)
+    center = sum(ug%cell_points(:, :, i_cell), dim=2) / ug%n_points_per_cell
+  end function iu_get_cell_center
 
   ! Find a nearby cell at a new location
   integer function find_nearby_cell_kdtree(ug, r) result(i_cell)
