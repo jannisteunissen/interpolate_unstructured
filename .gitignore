@@ -8,3 +8,7 @@
 *.mod
 /libinterp_unstructured.a
 *.binda
+/test_vtk
+/test_data/test_vtk_quad.vtu
+/test_data/test_vtk_tetra.vtu
+/test_data/test_vtk_triangle.vtu

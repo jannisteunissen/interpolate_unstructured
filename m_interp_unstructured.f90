@@ -2,6 +2,7 @@ module m_interp_unstructured
   use iso_fortran_env, only: error_unit, int64
   use kdtree2_module
   use m_binda
+  use m_vtk
 
   implicit none
   private
@@ -64,6 +65,7 @@ module m_interp_unstructured
   public :: iu_get_cell_scalar_at
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
+  public :: iu_write_vtk
 
 contains
 
@@ -597,5 +599,59 @@ contains
     call build_kdtree(ug)
 
   end subroutine iu_read_grid
+
+  !> Write unstructured grid back to VTK file
+  subroutine iu_write_vtk(ug, filename)
+    type(iu_grid_t), intent(in)  :: ug
+    character(len=*), intent(in) :: filename !< Filename for the vtk file
+    integer                      :: n
+    integer, allocatable         :: offsets(:), cell_types(:), connectivity(:)
+    type(vtk_t)                  :: vtkf
+
+    allocate(offsets(ug%n_cells))
+    allocate(cell_types(ug%n_cells))
+    allocate(connectivity(ug%n_cells*ug%n_points_per_cell))
+
+    select case (ug%cell_type)
+    case (iu_triangle)
+       cell_types(:) = 5
+    case (iu_quad)
+       cell_types(:) = 9
+    case (iu_tetra)
+       cell_types(:) = 10
+    case default
+       error stop "Unsupported ug%cell_type"
+    end select
+
+    do n = 1, ug%n_cells
+       offsets(n) = n * ug%n_points_per_cell
+    end do
+
+    ! Revert back to zero-based indexing
+    connectivity(:) = pack(ug%cells-1, .true.)
+
+    call vtk_ini_xml(vtkf, trim(filename), 'UnstructuredGrid')
+    call vtk_dat_xml(vtkf, "UnstructuredGrid", .true.)
+    call vtk_unstr_geo_xml(vtkf, ug%n_points, ug%n_cells, ug%points)
+    call vtk_unstr_con_xml(vtkf, connectivity, offsets, cell_types, ug%n_cells)
+
+    call vtk_dat_xml(vtkf, "CellData", .true.)
+    do n = 1, ug%n_cell_data
+       call vtk_var_r8_xml(vtkf, trim(ug%cell_data_names(n)), &
+            ug%cell_data(:, n), ug%n_cells)
+    end do
+    call vtk_dat_xml(vtkf, "CellData", .false.)
+
+    call vtk_dat_xml(vtkf, "PointData", .true.)
+    do n = 1, ug%n_point_data
+       call vtk_var_r8_xml(vtkf, trim(ug%point_data_names(n)), &
+            ug%point_data(:, n), ug%n_points)
+    end do
+    call vtk_dat_xml(vtkf, "PointData", .false.)
+
+    call vtk_unstr_geo_xml_close(vtkf)
+    call vtk_dat_xml(vtkf, "UnstructuredGrid", .false.)
+    call vtk_end_xml(vtkf)
+  end subroutine iu_write_vtk
 
 end module m_interp_unstructured
