@@ -12,3 +12,6 @@
 /test_data/test_vtk_quad.vtu
 /test_data/test_vtk_tetra.vtu
 /test_data/test_vtk_triangle.vtu
+/test_trace_field
+/test_data/test_trace_field.3D
+/test_data/test_trace_field.vtu

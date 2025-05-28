@@ -60,9 +60,12 @@ module m_interp_unstructured
   public :: iu_read_grid
   public :: iu_get_point_data_index
   public :: iu_get_cell_data_index
+  public :: iu_add_cell_data
+  public :: iu_add_point_data
   public :: iu_get_cell_center
   public :: iu_get_cell
   public :: iu_get_cell_scalar_at
+  public :: iu_trace_field
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
   public :: iu_write_vtk
@@ -81,6 +84,48 @@ contains
 
     if (ix == ug%n_point_data + 1) ix = -1
   end subroutine iu_get_point_data_index
+
+  !> Extend cell data with one variable
+  subroutine iu_add_cell_data(ug, name, i_var)
+    type(iu_grid_t), intent(inout)  :: ug
+    character(len=*), intent(in)    :: name
+    integer, intent(out)            :: i_var
+    real(dp), allocatable           :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%cell_data, old_data)
+    call move_alloc(ug%cell_data_names, old_names)
+    allocate(ug%cell_data(ug%n_cells, ug%n_cell_data+1))
+    allocate(ug%cell_data_names(ug%n_cell_data+1))
+
+    ug%cell_data(:, 1:ug%n_cell_data) = old_data
+    ug%cell_data_names(1:ug%n_cell_data) = old_names
+
+    ug%n_cell_data = ug%n_cell_data + 1
+    ug%cell_data_names(ug%n_cell_data) = name
+    i_var = ug%n_cell_data
+  end subroutine iu_add_cell_data
+
+  !> Extend point data with one variable
+  subroutine iu_add_point_data(ug, name, i_var)
+    type(iu_grid_t), intent(inout)  :: ug
+    character(len=*), intent(in)    :: name
+    integer, intent(out)            :: i_var
+    real(dp), allocatable           :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%point_data, old_data)
+    call move_alloc(ug%point_data_names, old_names)
+    allocate(ug%point_data(ug%n_points, ug%n_point_data+1))
+    allocate(ug%point_data_names(ug%n_point_data+1))
+
+    ug%point_data(:, 1:ug%n_point_data) = old_data
+    ug%point_data_names(1:ug%n_point_data) = old_names
+
+    ug%n_point_data = ug%n_point_data + 1
+    ug%point_data_names(ug%n_point_data) = name
+    i_var = ug%n_point_data
+  end subroutine iu_add_point_data
 
   ! Find index of cell data variable, -1 if not present
   subroutine iu_get_cell_data_index(ug, name, ix)
@@ -207,23 +252,27 @@ contains
 
   end subroutine set_face_normal_vectors
 
-  ! Find cell containing r, optionally using a nearby cell as a starting
-  ! point. Returns a value less than one if the cell is not found.
-  integer function iu_get_cell(ug, r, i_guess) result(i_cell)
+  ! Find cell containing r. If the argument i_cell > 1, use cell i_cell as a
+  ! starting point.
+  subroutine iu_get_cell(ug, r, i_cell)
     type(iu_grid_t), intent(in) :: ug
     real(dp), intent(in)        :: r(3)
-    integer, intent(inout)      :: i_guess
+    !> Input: guess for i_cell or value < 1. Output: The cell containing r
+    integer, intent(inout)      :: i_cell
+    integer                     :: i_start
     real(dp)                    :: r0(3)
 
-    if (i_guess < 1) then
-       i_guess = find_nearby_cell_kdtree(ug, r)
+    if (i_cell < 1) then
+       i_start = find_nearby_cell_kdtree(ug, r)
+    else
+       i_start = i_cell
     end if
 
-    ! Start from center of cell i_guess
-    r0 = sum(ug%cell_points(:, :, i_guess), dim=2) / ug%n_points_per_cell
+    ! Start from center of cell i_cell
+    r0 = sum(ug%cell_points(:, :, i_start), dim=2) / ug%n_points_per_cell
 
-    call get_cell_through_neighbors(ug, r0, r, i_guess, i_cell)
-  end function iu_get_cell
+    call get_cell_through_neighbors(ug, r0, r, i_start, i_cell)
+  end subroutine iu_get_cell
 
   ! Get the value of cell data at the cell that contains r
   subroutine iu_get_cell_scalar_at(ug, r, i_var, i_guess, res)
@@ -235,7 +284,7 @@ contains
     integer, intent(inout)      :: i_guess
     real(dp), intent(inout)     :: res ! Result
 
-    i_guess = iu_get_cell(ug, r, i_guess)
+    call iu_get_cell(ug, r, i_guess)
     if (i_guess >= 1) res = ug%cell_data(i_guess, i_var)
   end subroutine iu_get_cell_scalar_at
 
@@ -269,7 +318,7 @@ contains
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
 
-    i_cell = iu_get_cell(ug, r, i_cell)
+    call iu_get_cell(ug, r, i_cell)
 
     ! Exit if cell not found
     if (i_cell <= 0) return
@@ -653,5 +702,107 @@ contains
     call vtk_dat_xml(vtkf, "UnstructuredGrid", .false.)
     call vtk_end_xml(vtkf)
   end subroutine iu_write_vtk
+
+  !> Trace the field given by the point data in i_field(:) until a boundary is reached
+  subroutine iu_trace_field(ug, ndim, r_start, i_field, max_points, n_points, &
+       points, fields, min_dx, max_dx, abs_tol)
+    type(iu_grid_t), intent(in) :: ug
+    integer, intent(in)         :: ndim !< Problem dimension
+    real(dp), intent(in)        :: r_start(ndim) !< Start location
+    integer, intent(in)         :: i_field(ndim) !< Field to trace (stored as point data)
+    integer, intent(in)         :: max_points !< Maximum number of points along path
+    integer, intent(out)        :: n_points !< Number of points along path
+    real(dp), intent(inout)     :: points(ndim, max_points) !< Location at each point
+    real(dp), intent(inout)     :: fields(ndim, max_points) !< Field at each point
+    real(dp), intent(in)        :: min_dx !< Min distance per step
+    real(dp), intent(in)        :: max_dx !< Max distance per step
+    real(dp), intent(in)        :: abs_tol !< Absolute tolerance in r per step
+
+    integer  :: i_cell
+    real(dp) :: r0(3), rq(3), r1(3)
+    real(dp) :: field_0(ndim), field_1(ndim)
+    real(dp) :: unitvec_0(ndim), unitvec_1(ndim)
+    real(dp) :: dx, dx_factor, error_estimate
+
+    if (max_dx < min_dx) error stop "max_dx < min_dx"
+    if (max_points < 1) error stop "max_points < 1"
+    if (abs_tol <= 0.0_dp) error stop "abs_tol <= 0.0_dp"
+
+    ! Set unused coordinates to zero
+    r0(ndim+1:) = 0.0_dp
+    rq(ndim+1:) = 0.0_dp
+    r1(ndim+1:) = 0.0_dp
+
+    r0(1:ndim) = r_start
+    dx         = max_dx
+    n_points   = 1
+    i_cell     = 0
+
+    ! Get field at initial point
+    call iu_interpolate_at(ug, r0, ndim, i_field, field_0, i_cell)
+    if (i_cell <= 0) return
+
+    points(:, n_points) = r0(1:ndim)
+    fields(:, n_points) = field_0
+
+    do while (n_points <= max_points)
+       ! Field for forward Euler step
+       call iu_interpolate_at(ug, r0, ndim, i_field, field_0, i_cell)
+       unitvec_0 = field_0 / norm2(field_0)
+
+       ! Get field for Heun's method, while reducing step size if a domain
+       ! boundary is reached
+       do
+          rq(1:ndim) = r0(1:ndim) + dx * unitvec_0
+          call get_field_unitvec(ndim, rq, unitvec_1, i_cell)
+
+          call iu_interpolate_at(ug, rq, ndim, i_field, field_1, i_cell)
+          unitvec_1 = field_1 / norm2(field_1)
+
+          ! Check if still inside domain
+          if (i_cell > 0) then
+             exit               ! Found field
+          else if (dx >= 2 * min_dx) then
+             dx = 0.5_dp * dx   ! Reduce dx
+          else
+             return             ! Reached boundary with small dx
+          end if
+       end do
+
+       ! New position with Heun's method
+       r1(1:ndim) = r0(1:ndim) + 0.5_dp * dx * (unitvec_0 + unitvec_1)
+
+       ! Estimate error in coordinates
+       error_estimate = norm2(r1(1:ndim) - rq(1:ndim))
+
+       if (error_estimate < abs_tol) then
+          ! Step is accepted
+          n_points = n_points + 1
+          points(:, n_points) = r1(1:ndim)
+          fields(:, n_points) = 0.5_dp * (field_0 + field_1)
+          r0(1:ndim) = r1(1:ndim)
+       end if
+
+       ! Adjust dx to have approximately an error of 0.5 * abs_tol per step
+       dx_factor = min(2.0_dp, (0.5_dp*abs_tol/error_estimate)**(1/3.0_dp))
+       dx = max(min_dx, min(max_dx, dx * dx_factor))
+    end do
+
+    ! If this is reached, the loop did not exit at a boundary
+    n_points = max_points + 1
+
+  contains
+
+    subroutine get_field_unitvec(ndim, r, unitvec, i_cell)
+      integer, intent(in)    :: ndim
+      real(dp), intent(in)   :: r(ndim)
+      real(dp), intent(out)  :: unitvec(ndim)
+      integer, intent(inout) :: i_cell
+
+      call iu_interpolate_at(ug, r, ndim, i_field, unitvec, i_cell)
+      unitvec = unitvec / norm2(unitvec)
+    end subroutine get_field_unitvec
+
+  end subroutine iu_trace_field
 
 end module m_interp_unstructured

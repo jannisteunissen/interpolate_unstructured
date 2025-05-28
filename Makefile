@@ -3,7 +3,7 @@ FFLAGS := -O2 -g -std=f2008 -Wall -Wextra
 ifeq ($(DEBUG), 1)
 	FFLAGS += -O0 -fcheck=all
 endif
-TESTS := test_triangle test_quad test_tetra test_vtk
+TESTS := test_triangle test_quad test_tetra test_vtk test_trace_field
 EXAMPLES := benchmark $(TESTS)
 LIB := libinterp_unstructured.a
 OBJECTS := m_interp_unstructured.o kdtree2_module.o m_binda.o m_vtk.o
