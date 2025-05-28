@@ -754,7 +754,6 @@ contains
        ! boundary is reached
        do
           rq(1:ndim) = r0(1:ndim) + dx * unitvec_0
-          call get_field_unitvec(ndim, rq, unitvec_1, i_cell)
 
           call iu_interpolate_at(ug, rq, ndim, i_field, field_1, i_cell)
           unitvec_1 = field_1 / norm2(field_1)
@@ -790,18 +789,6 @@ contains
 
     ! If this is reached, the loop did not exit at a boundary
     n_points = max_points + 1
-
-  contains
-
-    subroutine get_field_unitvec(ndim, r, unitvec, i_cell)
-      integer, intent(in)    :: ndim
-      real(dp), intent(in)   :: r(ndim)
-      real(dp), intent(out)  :: unitvec(ndim)
-      integer, intent(inout) :: i_cell
-
-      call iu_interpolate_at(ug, r, ndim, i_field, unitvec, i_cell)
-      unitvec = unitvec / norm2(unitvec)
-    end subroutine get_field_unitvec
 
   end subroutine iu_trace_field
 
