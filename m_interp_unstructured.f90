@@ -721,7 +721,7 @@ contains
     integer  :: i_cell
     real(dp) :: r0(3), rq(3), r1(3)
     real(dp) :: field_0(ndim), field_1(ndim)
-    real(dp) :: unitvec_0(ndim), unitvec_1(ndim)
+    real(dp) :: unitvec(ndim)
     real(dp) :: dx, dx_factor, error_estimate
 
     if (max_dx < min_dx) error stop "max_dx < min_dx"
@@ -748,15 +748,14 @@ contains
     do while (n_points <= max_points)
        ! Field for forward Euler step
        call iu_interpolate_at(ug, r0, ndim, i_field, field_0, i_cell)
-       unitvec_0 = field_0 / norm2(field_0)
+       unitvec = field_0 / norm2(field_0)
 
        ! Get field for Heun's method, while reducing step size if a domain
        ! boundary is reached
        do
-          rq(1:ndim) = r0(1:ndim) + dx * unitvec_0
+          rq(1:ndim) = r0(1:ndim) + dx * unitvec
 
           call iu_interpolate_at(ug, rq, ndim, i_field, field_1, i_cell)
-          unitvec_1 = field_1 / norm2(field_1)
 
           ! Check if still inside domain
           if (i_cell > 0) then
@@ -769,7 +768,9 @@ contains
        end do
 
        ! New position with Heun's method
-       r1(1:ndim) = r0(1:ndim) + 0.5_dp * dx * (unitvec_0 + unitvec_1)
+       field_1 = 0.5_dp * (field_0 + field_1)
+       unitvec = field_1 / norm2(field_1)
+       r1(1:ndim) = r0(1:ndim) + dx * unitvec
 
        ! Estimate error in coordinates
        error_estimate = norm2(r1(1:ndim) - rq(1:ndim))
@@ -778,7 +779,7 @@ contains
           ! Step is accepted
           n_points = n_points + 1
           points(:, n_points) = r1(1:ndim)
-          fields(:, n_points) = 0.5_dp * (field_0 + field_1)
+          fields(:, n_points) = field_1
           r0(1:ndim) = r1(1:ndim)
        end if
 
