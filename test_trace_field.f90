@@ -7,12 +7,11 @@ program test_trace_field
   type(iu_grid_t)    :: ug
   integer            :: n, i_vx, i_vy
 
-  integer, parameter :: max_points = 1000
-  integer            :: n_points
-  real(dp)           :: r_start(2)
-  real(dp)           :: points(2, max_points)
-  real(dp)           :: fields(2, max_points)
-  real(dp)           :: min_dx, max_dx, abs_tol
+  integer  :: max_steps, n_steps
+  real(dp) :: r_start(2)
+  real(dp) :: min_dx, max_dx
+  real(dp) :: rtol, atol, y(3)
+  logical  :: reverse
 
   call iu_read_grid('test_data/triangle.binda', ug)
   call iu_add_point_data(ug, 'vx', i_vx)
@@ -25,36 +24,27 @@ program test_trace_field
 
   call iu_write_vtk(ug, 'test_data/test_trace_field.vtu')
 
-  r_start = [1.5_dp, 0.0_dp]
-  abs_tol = 1e-3_dp
-  min_dx  = 1e-4_dp
-  max_dx  = 1.0e-1_dp
+  r_start     = [1.500_dp, 0.0_dp]
+  rtol        = 1e-3_dp
+  atol        = 1e-3_dp
+  min_dx      = 1e-5_dp
+  max_dx      = 1.0e-1_dp
+  reverse     = .false.
+  max_steps   = 100
 
-  call iu_trace_field(ug, 2, r_start, [i_vx, i_vy], max_points, n_points, &
-       points, fields, min_dx, max_dx, abs_tol)
+  call iu_integrate_along_field(ug, dummy_func, 2, r_start, [i_vx, i_vy], &
+       min_dx, max_dx, max_steps, rtol, atol, reverse, y, n_steps)
 
-  if (n_points > max_points) error stop "Boundary not reached"
-
-  call write_field_trace(n_points, points, fields, &
-       'test_data/test_trace_field.3D')
+  print *, "Solution (x, y, length):", y
+  print *, "n_steps:", n_steps
 
 contains
 
-  subroutine write_field_trace(n_points, points, fields, filename)
-    integer, intent(in)          :: n_points
-    real(dp), intent(in)         :: points(2, n_points)
-    real(dp), intent(in)         :: fields(2, n_points)
-    character(len=*), intent(in) :: filename
-    integer                      :: my_unit, n
-
-    open(newunit=my_unit, file=trim(filename), action="write")
-    write(my_unit, *) "x y z field_norm"
-    do n = 1, n_points
-       write(my_unit, *) points(:, n), 0.0_dp, norm2(fields(:, n))
-    end do
-    close(my_unit)
-
-    print *, "Wrote ", trim(filename)
-  end subroutine write_field_trace
+  real(dp) function dummy_func(ndim, r, field)
+    integer, intent(in) :: ndim
+    real(dp), intent(in) :: r(ndim)
+    real(dp), intent(in) :: field(ndim)
+    dummy_func = 1.0_dp
+  end function dummy_func
 
 end program test_trace_field

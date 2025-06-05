@@ -51,6 +51,16 @@ module m_interp_unstructured
      type(kdtree2) :: tree
   end type iu_grid_t
 
+  interface
+     function field_func_t(ndim, r, field) result(val)
+       import
+       integer, intent(in)  :: ndim
+       real(dp), intent(in) :: r(ndim)
+       real(dp), intent(in) :: field(ndim)
+       real(dp)             :: val
+     end function field_func_t
+  end interface
+
   ! Public types
   public :: iu_grid_t
   public :: iu_triangle, iu_quad, iu_tetra
@@ -65,7 +75,7 @@ module m_interp_unstructured
   public :: iu_get_cell_center
   public :: iu_get_cell
   public :: iu_get_cell_scalar_at
-  public :: iu_trace_field
+  public :: iu_integrate_along_field
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
   public :: iu_write_vtk
@@ -703,94 +713,172 @@ contains
     call vtk_end_xml(vtkf)
   end subroutine iu_write_vtk
 
-  !> Trace the field given by the point data in i_field(:) until a boundary is reached
-  subroutine iu_trace_field(ug, ndim, r_start, i_field, max_points, n_points, &
-       points, fields, min_dx, max_dx, abs_tol)
-    type(iu_grid_t), intent(in) :: ug
-    integer, intent(in)         :: ndim !< Problem dimension
-    real(dp), intent(in)        :: r_start(ndim) !< Start location
-    integer, intent(in)         :: i_field(ndim) !< Field to trace (stored as point data)
-    integer, intent(in)         :: max_points !< Maximum number of points along path
-    integer, intent(out)        :: n_points !< Number of points along path
-    real(dp), intent(inout)     :: points(ndim, max_points) !< Location at each point
-    real(dp), intent(inout)     :: fields(ndim, max_points) !< Field at each point
-    real(dp), intent(in)        :: min_dx !< Min distance per step
-    real(dp), intent(in)        :: max_dx !< Max distance per step
-    real(dp), intent(in)        :: abs_tol !< Absolute tolerance in r per step
+  !> Integrate a function along the field given by the point data in
+  !> i_field(:) until a boundary is reached
+  subroutine iu_integrate_along_field(ug, func, ndim, r_start, i_field, &
+       min_dx, max_dx, max_steps, rtol, atol, reverse, y, n_steps, &
+       i_cell_mask, mask_value)
+    type(iu_grid_t), intent(in)   :: ug
+    procedure(field_func_t)       :: func
+    integer, intent(in)           :: ndim          !< Problem dimension
+    real(dp), intent(in)          :: r_start(ndim) !< Start location
+    integer, intent(in)           :: i_field(ndim) !< Field to trace (stored as point data)
+    real(dp), intent(in)          :: min_dx        !< Min distance per step
+    real(dp), intent(in)          :: max_dx        !< Max distance per step
+    integer, intent(in)           :: max_steps     !< Max number of steps
+    real(dp), intent(in)          :: rtol          !< Relative tolerance
+    real(dp), intent(in)          :: atol          !< Absolute tolerance
+    logical, intent(in)           :: reverse       !< Go in minus field direction
+    real(dp), intent(out)         :: y(ndim+1)     !< Solution at boundary
+    integer, intent(out)          :: n_steps       !< Number of steps taken
+    integer, intent(in), optional :: i_cell_mask   !< Use cell mask
+    integer, intent(in), optional :: mask_value    !< Mask value
 
-    integer  :: i_cell
-    real(dp) :: r0(3), rq(3), r1(3)
-    real(dp) :: field_0(ndim), field_1(ndim)
-    real(dp) :: unitvec(ndim)
-    real(dp) :: dx, dx_factor, error_estimate
+    real(dp), parameter :: safety_fac = 0.8_dp
+    real(dp), parameter :: inv_24 = 1/24.0_dp
+    real(dp), parameter :: inv_9 = 1/9.0_dp
+
+    integer  :: i_cell, i_cell_prev, last_rejected
+    real(dp) :: y_new(ndim+1), y_2nd(ndim+1)
+    real(dp) :: r0(3), r(3), field(ndim), field_prev(ndim)
+    real(dp) :: err, scales(ndim+1), dx, dx_factor
+    real(dp) :: k(ndim+1, 4), max_growth
+    logical  :: invalid_position
 
     if (max_dx < min_dx) error stop "max_dx < min_dx"
-    if (max_points < 1) error stop "max_points < 1"
-    if (abs_tol <= 0.0_dp) error stop "abs_tol <= 0.0_dp"
+    if (max_steps < 1) error stop "max_steps < 1"
+    if (present(i_cell_mask) .neqv. present(mask_value)) &
+         error stop "present(i_cell_mask) .neqv. present(mask_value)"
 
     ! Set unused coordinates to zero
     r0(ndim+1:) = 0.0_dp
-    rq(ndim+1:) = 0.0_dp
-    r1(ndim+1:) = 0.0_dp
+    r(ndim+1:) = 0.0_dp
 
-    r0(1:ndim) = r_start
-    dx         = max_dx
-    n_points   = 1
-    i_cell     = 0
+    ! Initial solution
+    y(1:ndim) = r_start
+    y(ndim+1) = 0.0_dp
+
+    ! Initialization
+    r0(1:ndim)       = r_start
+    invalid_position = .false.
+    last_rejected    = -100
+    dx               = max_dx
+    i_cell_prev      = 0
 
     ! Get field at initial point
-    call iu_interpolate_at(ug, r0, ndim, i_field, field_0, i_cell)
-    if (i_cell <= 0) return
+    call iu_interpolate_at(ug, r0, ndim, i_field, &
+         field_prev, i_cell_prev)
 
-    points(:, n_points) = r0(1:ndim)
-    fields(:, n_points) = field_0
+    ! Exit if initial cell is not valid
+    if (.not. cell_is_valid(i_cell_prev, mask_value, i_cell_mask)) return
 
-    do while (n_points <= max_points)
-       ! Field for forward Euler step
-       call iu_interpolate_at(ug, r0, ndim, i_field, field_0, i_cell)
-       unitvec = field_0 / norm2(field_0)
+    do n_steps = 1, max_steps
+       i_cell = i_cell_prev
+       r0(1:ndim) = y(1:ndim)   ! Current position
 
-       ! Get field for Heun's method, while reducing step size if a domain
-       ! boundary is reached
-       do
-          rq(1:ndim) = r0(1:ndim) + dx * unitvec
+       if (invalid_position .and. dx >= 2 * min_dx) then
+          last_rejected = n_steps - 1
+          dx = 0.1_dp * dx
+       else if (invalid_position) then
+          return             ! Reached a boundary
+       end if
+       invalid_position = .false.
 
-          call iu_interpolate_at(ug, rq, ndim, i_field, field_1, i_cell)
+       ! First sub-step, re-uses field from last step
+       k(1:ndim, 1) = get_unitvec(ndim, field_prev, reverse)
+       k(ndim+1, 1) = func(ndim, r0(1:ndim), field)
 
-          ! Check if still inside domain
-          if (i_cell > 0) then
-             exit               ! Found field
-          else if (dx >= 2 * min_dx) then
-             dx = 0.5_dp * dx   ! Reduce dx
-          else
-             return             ! Reached boundary with small dx
-          end if
-       end do
-
-       ! New position with Heun's method
-       field_1 = 0.5_dp * (field_0 + field_1)
-       unitvec = field_1 / norm2(field_1)
-       r1(1:ndim) = r0(1:ndim) + dx * unitvec
-
-       ! Estimate error in coordinates
-       error_estimate = norm2(r1(1:ndim) - rq(1:ndim))
-
-       if (error_estimate < abs_tol) then
-          ! Step is accepted
-          n_points = n_points + 1
-          points(:, n_points) = r1(1:ndim)
-          fields(:, n_points) = field_1
-          r0(1:ndim) = r1(1:ndim)
+       ! Second sub-step
+       r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
+       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
+       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+          invalid_position = .true.
+          cycle
        end if
 
-       ! Adjust dx to have approximately an error of 0.5 * abs_tol per step
-       dx_factor = min(2.0_dp, (0.5_dp*abs_tol/error_estimate)**(1/3.0_dp))
+       k(1:ndim, 2) = get_unitvec(ndim, field, reverse)
+       k(ndim+1, 2) = func(ndim, r(1:ndim), field)
+
+       ! Third sub-step
+       r(1:ndim) = r0(1:ndim) + 0.75_dp * dx * k(1:ndim, 2)
+       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
+       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+          invalid_position = .true.
+          cycle
+       end if
+
+       k(1:ndim, 3) = get_unitvec(ndim, field, reverse)
+       k(ndim+1, 3) = func(ndim, r(1:ndim), field)
+
+       ! Update with third-order scheme
+       y_new = y + dx * inv_9 * (2 * k(:, 1) + 3 * k(:, 2) + 4 * k(:, 3))
+
+       ! Fourth sub-step
+       r(1:ndim) = y_new(1:ndim)
+       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
+       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+          invalid_position = .true.
+          cycle
+       end if
+
+       k(1:ndim, 4) = get_unitvec(ndim, field, reverse)
+       k(ndim+1, 4) = func(ndim, r(1:ndim), field)
+
+       ! Estimate with second-order scheme
+       y_2nd = y + dx * inv_24 * &
+            (7 * k(:, 1) + 6 * k(:, 2) + 8 * k(:, 3) + 3 * k(:, 4))
+
+       scales = atol + max(abs(y_new), abs(y_2nd)) * rtol
+       err = sqrt(sum(((y_new-y_2nd)/scales)**2) / 3)
+
+       if (err <= 1 .or. dx < 2 * min_dx) then
+          ! Step is accepted, advance solution y
+          y = y_new
+          field_prev = field
+          i_cell_prev = i_cell
+       else
+          last_rejected = n_steps
+       end if
+
+       if (last_rejected > n_steps - 2) then
+          ! If steps were recently rejected, do not grow dx
+          max_growth = 1.0_dp
+       else
+          ! Limit increase, to prevent increasing dx at boundaries
+          max_growth = 2.0_dp
+       end if
+
+       ! Adjust dx to for an error of safety_fac * abs_tol per step
+       dx_factor = min(max_growth, safety_fac * (1/err)**(1/3.0_dp))
        dx = max(min_dx, min(max_dx, dx * dx_factor))
     end do
 
-    ! If this is reached, the loop did not exit at a boundary
-    n_points = max_points + 1
+  contains
 
-  end subroutine iu_trace_field
+    function get_unitvec(ndim, field, reverse) result(unitvec)
+      integer, intent(in)  :: ndim
+      real(dp), intent(in) :: field(ndim)
+      logical, intent(in)  :: reverse
+      real(dp)             :: unitvec(ndim)
+
+      unitvec = field / norm2(field)
+      if (reverse) unitvec = -unitvec
+    end function get_unitvec
+
+    logical function cell_is_valid(ix, mask_value, i_cell_mask)
+      integer, intent(in)           :: ix
+      integer, intent(in), optional :: mask_value
+      integer, intent(in), optional :: i_cell_mask
+
+      if (ix <= 0) then
+         cell_is_valid = .false.
+      else if (present(mask_value)) then
+         cell_is_valid = abs(ug%cell_data(ix, i_cell_mask) - mask_value) <= 0
+      else
+         cell_is_valid = .true.
+      end if
+    end function cell_is_valid
+
+  end subroutine iu_integrate_along_field
 
 end module m_interp_unstructured
