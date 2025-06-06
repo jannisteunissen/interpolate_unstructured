@@ -34,6 +34,7 @@ module m_interp_unstructured
      real(dp) :: rmax(3)
 
      real(dp), allocatable :: points(:, :)
+     logical, allocatable  :: point_is_at_boundary(:)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
      integer, allocatable  :: neighbors(:, :)
@@ -205,7 +206,8 @@ contains
     end do
   end subroutine set_cell_points
 
-  ! Compute normal vectors to cell faces
+  ! Compute normal vectors to cell faces. Also store which points lie at the
+  ! domain boundary.
   subroutine set_face_normal_vectors(ug)
     type(iu_grid_t), intent(inout) :: ug
     integer                        :: n, k, k1, k2
@@ -213,6 +215,8 @@ contains
     real(dp)                       :: normal_cell(3), normal_face(3)
 
     allocate(ug%cell_face_normals(3, ug%n_points_per_cell, ug%n_cells))
+    allocate(ug%point_is_at_boundary(ug%n_points))
+    ug%point_is_at_boundary(:) = .false.
 
     select case (ug%cell_type)
     case (iu_triangle, iu_quad)
@@ -235,6 +239,10 @@ contains
              if (dot_product(vec, normal_face) < 0) normal_face = -normal_face
 
              ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+
+             if (ug%neighbors(k, n) < 1) then
+                ug%point_is_at_boundary(ug%cells([k, k1], n)) = .true.
+             end if
           end do
        end do
     case (iu_tetra)
@@ -254,6 +262,10 @@ contains
              if (dot_product(vec, normal_face) < 0) normal_face = -normal_face
 
              ug%cell_face_normals(:, k, n) = normal_face / norm2(normal_face)
+
+             if (ug%neighbors(k, n) < 1) then
+                ug%point_is_at_boundary(ug%cells([k, k1, k2], n)) = .true.
+             end if
           end do
        end do
     case default
