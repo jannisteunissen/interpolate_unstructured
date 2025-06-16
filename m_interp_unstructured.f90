@@ -53,13 +53,14 @@ module m_interp_unstructured
   end type iu_grid_t
 
   interface
-     function field_func_t(ndim, r, field) result(val)
+     subroutine integrate_sub_t(ndim, r, field, nvar, integrand)
        import
-       integer, intent(in)  :: ndim
-       real(dp), intent(in) :: r(ndim)
-       real(dp), intent(in) :: field(ndim)
-       real(dp)             :: val
-     end function field_func_t
+       integer, intent(in)   :: ndim
+       real(dp), intent(in)  :: r(ndim)
+       real(dp), intent(in)  :: field(ndim)
+       integer, intent(in)   :: nvar
+       real(dp), intent(out) :: integrand(nvar)
+     end subroutine integrate_sub_t
   end interface
 
   ! Public types
@@ -727,30 +728,33 @@ contains
 
   !> Integrate a function along the field given by the point data in
   !> i_field(:) until a boundary is reached
-  subroutine iu_integrate_along_field(ug, func, ndim, r_start, i_field, &
-       min_dx, max_dx, max_steps, rtol, atol, reverse, y, n_steps, &
+  subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
+       min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, n_steps, &
        i_cell_mask, mask_value)
     type(iu_grid_t), intent(in)   :: ug
-    procedure(field_func_t)       :: func
-    integer, intent(in)           :: ndim          !< Problem dimension
+    procedure(integrate_sub_t)    :: sub_int
+    integer, intent(in)           :: ndim !< Number of spatial dimensions
     real(dp), intent(in)          :: r_start(ndim) !< Start location
     integer, intent(in)           :: i_field(ndim) !< Field to trace (stored as point data)
-    real(dp), intent(in)          :: min_dx        !< Min distance per step
-    real(dp), intent(in)          :: max_dx        !< Max distance per step
-    integer, intent(in)           :: max_steps     !< Max number of steps
-    real(dp), intent(in)          :: rtol          !< Relative tolerance
-    real(dp), intent(in)          :: atol          !< Absolute tolerance
-    logical, intent(in)           :: reverse       !< Go in minus field direction
-    real(dp), intent(out)         :: y(ndim+1)     !< Solution at boundary
-    integer, intent(out)          :: n_steps       !< Number of steps taken
-    integer, intent(in), optional :: i_cell_mask   !< Use cell mask
-    integer, intent(in), optional :: mask_value    !< Mask value
+    real(dp), intent(in)          :: min_dx    !< Min distance per step
+    real(dp), intent(in)          :: max_dx    !< Max distance per step
+    integer, intent(in)           :: max_steps !< Max number of steps
+    real(dp), intent(in)          :: rtol    !< Relative tolerance
+    real(dp), intent(in)          :: atol    !< Absolute tolerance
+    logical, intent(in)           :: reverse !< Go in minus field direction
+    integer, intent(in)           :: nvar !< Number of variables to integrate
+    real(dp), intent(inout)       :: y(ndim+nvar, max_steps) !< Solution at boundary
+    !> Number of steps taken. Equal to max_steps+1 if the boundary was not
+    !> reached within max_steps.
+    integer, intent(out)          :: n_steps
+    integer, intent(in), optional :: i_cell_mask !< Use cell mask
+    integer, intent(in), optional :: mask_value  !< Mask value
 
     real(dp), parameter :: safety_fac = 0.8_dp
     real(dp), parameter :: inv_24 = 1/24.0_dp
     real(dp), parameter :: inv_9 = 1/9.0_dp
 
-    integer  :: i_cell, i_cell_prev, last_rejected
+    integer  :: i_cell, i_cell_prev, iteration, last_rejected
     real(dp) :: y_new(ndim+1), y_2nd(ndim+1)
     real(dp) :: r0(3), r(3), field(ndim), field_prev(ndim)
     real(dp) :: err, scales(ndim+1), dx, dx_factor
@@ -767,8 +771,9 @@ contains
     r(ndim+1:) = 0.0_dp
 
     ! Initial solution
-    y(1:ndim) = r_start
-    y(ndim+1) = 0.0_dp
+    n_steps = 1
+    y(1:ndim, n_steps) = r_start
+    y(ndim+1:ndim+nvar, n_steps) = 0.0_dp
 
     ! Initialization
     r0(1:ndim)       = r_start
@@ -784,13 +789,16 @@ contains
     ! Exit if initial cell is not valid
     if (.not. cell_is_valid(i_cell_prev, mask_value, i_cell_mask)) return
 
-    do n_steps = 1, max_steps
+    ! The code below implements the Bogacki–Shampine Runge-Kutta method, which
+    ! is third order accurate. Higher order might not be beneficial since we
+    ! are linearly interpolating fields.
+    do iteration = 1, huge(1)-1
        i_cell = i_cell_prev
-       r0(1:ndim) = y(1:ndim)   ! Current position
+       r0(1:ndim) = y(1:ndim, n_steps)   ! Current position
 
        if (invalid_position .and. dx >= 2 * min_dx) then
-          last_rejected = n_steps - 1
-          dx = 0.1_dp * dx
+          last_rejected = iteration - 1
+          dx = 0.1_dp * dx      ! Reduce step size significantly
        else if (invalid_position) then
           return             ! Reached a boundary
        end if
@@ -798,7 +806,7 @@ contains
 
        ! First sub-step, re-uses field from last step
        k(1:ndim, 1) = get_unitvec(ndim, field_prev, reverse)
-       k(ndim+1, 1) = func(ndim, r0(1:ndim), field)
+       call sub_int(ndim, r0(1:ndim), field_prev, nvar, k(ndim+1:ndim+nvar, 1))
 
        ! Second sub-step
        r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
@@ -809,7 +817,7 @@ contains
        end if
 
        k(1:ndim, 2) = get_unitvec(ndim, field, reverse)
-       k(ndim+1, 2) = func(ndim, r(1:ndim), field)
+       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 2))
 
        ! Third sub-step
        r(1:ndim) = r0(1:ndim) + 0.75_dp * dx * k(1:ndim, 2)
@@ -820,10 +828,11 @@ contains
        end if
 
        k(1:ndim, 3) = get_unitvec(ndim, field, reverse)
-       k(ndim+1, 3) = func(ndim, r(1:ndim), field)
+       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 3))
 
        ! Update with third-order scheme
-       y_new = y + dx * inv_9 * (2 * k(:, 1) + 3 * k(:, 2) + 4 * k(:, 3))
+       y_new = y(:, n_steps) + dx * inv_9 * &
+            (2 * k(:, 1) + 3 * k(:, 2) + 4 * k(:, 3))
 
        ! Fourth sub-step
        r(1:ndim) = y_new(1:ndim)
@@ -834,10 +843,10 @@ contains
        end if
 
        k(1:ndim, 4) = get_unitvec(ndim, field, reverse)
-       k(ndim+1, 4) = func(ndim, r(1:ndim), field)
+       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 4))
 
        ! Estimate with second-order scheme
-       y_2nd = y + dx * inv_24 * &
+       y_2nd = y(:, n_steps) + dx * inv_24 * &
             (7 * k(:, 1) + 6 * k(:, 2) + 8 * k(:, 3) + 3 * k(:, 4))
 
        scales = atol + max(abs(y_new), abs(y_2nd)) * rtol
@@ -845,14 +854,17 @@ contains
 
        if (err <= 1 .or. dx < 2 * min_dx) then
           ! Step is accepted, advance solution y
-          y = y_new
+          n_steps = n_steps + 1
+          if (n_steps > max_steps) return
+
+          y(:, n_steps) = y_new
           field_prev = field
           i_cell_prev = i_cell
        else
-          last_rejected = n_steps
+          last_rejected = iteration
        end if
 
-       if (last_rejected > n_steps - 2) then
+       if (last_rejected > iteration - 2) then
           ! If steps were recently rejected, do not grow dx
           max_growth = 1.0_dp
        else
