@@ -729,8 +729,8 @@ contains
   !> Integrate a function along the field given by the point data in
   !> i_field(:) until a boundary is reached
   subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
-       min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, n_steps, &
-       i_cell_mask, mask_value)
+       min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, y_field, &
+       n_steps, i_cell_mask, mask_value)
     type(iu_grid_t), intent(in)   :: ug
     procedure(integrate_sub_t)    :: sub_int
     integer, intent(in)           :: ndim !< Number of spatial dimensions
@@ -743,9 +743,13 @@ contains
     real(dp), intent(in)          :: atol    !< Absolute tolerance
     logical, intent(in)           :: reverse !< Go in minus field direction
     integer, intent(in)           :: nvar !< Number of variables to integrate
-    real(dp), intent(inout)       :: y(ndim+nvar, max_steps) !< Solution at boundary
-    !> Number of steps taken. Equal to max_steps+1 if the boundary was not
-    !> reached within max_steps.
+    !> Solution curve. y(:, i) contains position (ndim) and the nvar
+    !> solution variables
+    real(dp), intent(inout)       :: y(ndim+nvar, max_steps)
+    !> Field along the solution curve
+    real(dp), intent(inout)       :: y_field(ndim, max_steps)
+    !> Number of steps taken plus one. Equal to max_steps+1 if the boundary
+    !> was not reached within max_steps.
     integer, intent(out)          :: n_steps
     integer, intent(in), optional :: i_cell_mask !< Use cell mask
     integer, intent(in), optional :: mask_value  !< Mask value
@@ -756,7 +760,7 @@ contains
 
     integer  :: i_cell, i_cell_prev, iteration, last_rejected
     real(dp) :: y_new(ndim+1), y_2nd(ndim+1)
-    real(dp) :: r0(3), r(3), field(ndim), field_prev(ndim)
+    real(dp) :: r0(3), r(3), field(ndim)
     real(dp) :: err, scales(ndim+1), dx, dx_factor
     real(dp) :: k(ndim+1, 4), max_growth
     logical  :: invalid_position
@@ -783,11 +787,13 @@ contains
     i_cell_prev      = 0
 
     ! Get field at initial point
-    call iu_interpolate_at(ug, r0, ndim, i_field, &
-         field_prev, i_cell_prev)
+    call iu_interpolate_at(ug, r0, ndim, i_field, field, i_cell_prev)
 
     ! Exit if initial cell is not valid
     if (.not. cell_is_valid(i_cell_prev, mask_value, i_cell_mask)) return
+
+    ! Store initial field
+    y_field(:, n_steps) = field
 
     ! The code below implements the Bogacki–Shampine Runge-Kutta method, which
     ! is third order accurate. Higher order might not be beneficial since we
@@ -795,6 +801,9 @@ contains
     do iteration = 1, huge(1)-1
        i_cell = i_cell_prev
        r0(1:ndim) = y(1:ndim, n_steps)   ! Current position
+
+       ! First sub-step, re-uses field from last step
+       field = y_field(:, n_steps)
 
        if (invalid_position .and. dx >= 2 * min_dx) then
           last_rejected = iteration - 1
@@ -804,9 +813,8 @@ contains
        end if
        invalid_position = .false.
 
-       ! First sub-step, re-uses field from last step
-       k(1:ndim, 1) = get_unitvec(ndim, field_prev, reverse)
-       call sub_int(ndim, r0(1:ndim), field_prev, nvar, k(ndim+1:ndim+nvar, 1))
+       k(1:ndim, 1) = get_unitvec(ndim, field, reverse)
+       call sub_int(ndim, r0(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 1))
 
        ! Second sub-step
        r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
@@ -858,7 +866,7 @@ contains
           if (n_steps > max_steps) return
 
           y(:, n_steps) = y_new
-          field_prev = field
+          y_field(:, n_steps) = field
           i_cell_prev = i_cell
        else
           last_rejected = iteration
