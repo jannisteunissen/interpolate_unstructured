@@ -730,7 +730,7 @@ contains
   !> i_field(:) until a boundary is reached
   subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
        min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, y_field, &
-       n_steps, i_cell_mask, mask_value)
+       n_steps, axisymmetric, i_cell_mask, mask_value)
     type(iu_grid_t), intent(in)   :: ug
     procedure(integrate_sub_t)    :: sub_int
     integer, intent(in)           :: ndim !< Number of spatial dimensions
@@ -751,18 +751,20 @@ contains
     !> Number of steps taken plus one. Equal to max_steps+1 if the boundary
     !> was not reached within max_steps.
     integer, intent(out)          :: n_steps
+    logical, intent(in)           :: axisymmetric
     integer, intent(in), optional :: i_cell_mask !< Use cell mask
     integer, intent(in), optional :: mask_value  !< Mask value
 
     real(dp), parameter :: safety_fac = 0.8_dp
     real(dp), parameter :: inv_24 = 1/24.0_dp
     real(dp), parameter :: inv_9 = 1/9.0_dp
+    real(dp), parameter :: min_radius = 1e-12_dp
 
     integer  :: i_cell, i_cell_prev, iteration, last_rejected
-    real(dp) :: y_new(ndim+1), y_2nd(ndim+1)
+    real(dp) :: y_new(ndim+nvar), y_2nd(ndim+nvar)
     real(dp) :: r0(3), r(3), field(ndim)
-    real(dp) :: err, scales(ndim+1), dx, dx_factor
-    real(dp) :: k(ndim+1, 4), max_growth
+    real(dp) :: err, scales(ndim+nvar), dx, dx_factor
+    real(dp) :: k(ndim+nvar, 4), max_growth
     logical  :: invalid_position
 
     if (max_dx < min_dx) error stop "max_dx < min_dx"
@@ -818,6 +820,8 @@ contains
 
        ! Second sub-step
        r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
+       if (axisymmetric) r(1) = max(r(1), min_radius)
+
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
        if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
           invalid_position = .true.
@@ -829,6 +833,8 @@ contains
 
        ! Third sub-step
        r(1:ndim) = r0(1:ndim) + 0.75_dp * dx * k(1:ndim, 2)
+       if (axisymmetric) r(1) = max(r(1), min_radius)
+
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
        if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
           invalid_position = .true.
@@ -844,6 +850,8 @@ contains
 
        ! Fourth sub-step
        r(1:ndim) = y_new(1:ndim)
+       if (axisymmetric) r(1) = max(r(1), min_radius)
+
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
        if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
           invalid_position = .true.

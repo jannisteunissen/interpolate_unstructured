@@ -11,7 +11,7 @@ program test_trace_field
   real(dp) :: r_start(2)
   real(dp) :: min_dx, max_dx
   real(dp) :: rtol, atol
-  logical  :: reverse
+  logical  :: reverse, axisymmetric
   real(dp), allocatable ::  y(:, :), y_field(:, :)
 
   call iu_read_grid('test_data/triangle.binda', ug)
@@ -32,6 +32,7 @@ program test_trace_field
   min_dx    = 1e-5_dp
   max_dx    = 1.0e-1_dp
   reverse   = .false.
+  axisymmetric = .false.
   max_steps = 100
   ndim      = 2
   nvar      = 1
@@ -41,7 +42,7 @@ program test_trace_field
 
   call iu_integrate_along_field(ug, ndim, sub_int, r_start, [i_vx, i_vy], &
        min_dx, max_dx, max_steps, rtol, atol, reverse, &
-       nvar, y, y_field, n_steps)
+       nvar, y, y_field, n_steps, axisymmetric)
 
   if (n_steps > max_steps) error stop "Boundary not reached"
 
