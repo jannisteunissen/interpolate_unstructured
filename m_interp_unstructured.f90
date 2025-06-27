@@ -37,6 +37,7 @@ module m_interp_unstructured
      logical, allocatable  :: point_is_at_boundary(:)
      integer, allocatable  :: cells(:, :)
      real(dp), allocatable :: cell_points(:, :, :)
+     real(dp), allocatable :: cell_volume(:)
      integer, allocatable  :: neighbors(:, :)
      real(dp), allocatable :: cell_face_normals(:, :, :)
      real(dp), allocatable :: point_data(:, :)
@@ -275,6 +276,45 @@ contains
 
   end subroutine set_face_normal_vectors
 
+  subroutine set_cell_volumes(ug)
+    type(iu_grid_t), intent(inout) :: ug
+    integer                        :: n
+    real(dp)                       :: v12(3), v13(3), v14(3)
+    real(dp)                       :: area1, area2
+
+    allocate(ug%cell_volume(ug%n_cells))
+
+    select case (ug%cell_type)
+    case (iu_triangle)
+       do n = 1, ug%n_cells
+          associate (p => ug%cell_points(:, :, n))
+            ug%cell_volume(n) = 0.5_dp * norm2(&
+                 cross_product(p(:, 2) - p(:, 1), p(:, 3) - p(:, 1)))
+          end associate
+       end do
+    case (iu_quad)
+       do n = 1, ug%n_cells
+          associate (p => ug%cell_points(:, :, n))
+            ! Split into two triangles: (p1, p2, p3) and (p1, p3, p4)
+            area1 = 0.5_dp * norm2(cross_product(p(:, 2) - p(:, 1), &
+                 p(:, 3) - p(:, 1)))
+            area2 = 0.5_dp * norm2(cross_product(p(:, 3) - p(:, 1), &
+                 p(:, 4) - p(:, 1)))
+            ug%cell_volume(n) = area1 + area2
+          end associate
+       end do
+    case (iu_tetra)
+       do n = 1, ug%n_cells
+          associate (p => ug%cell_points(:, :, n))
+            v12 = p(:, 2) - p(:, 1)
+            v13 = p(:, 3) - p(:, 1)
+            v14 = p(:, 4) - p(:, 1)
+            ug%cell_volume(n) = scalar_triple_product(v12, v13, v14)
+          end associate
+       end do
+    end select
+  end subroutine set_cell_volumes
+
   ! Find cell containing r. If the argument i_cell > 1, use cell i_cell as a
   ! starting point.
   subroutine iu_get_cell(ug, r, i_cell)
@@ -354,38 +394,38 @@ contains
     select case (ug%cell_type)
     case (iu_triangle)
        call interpolate_triangle(n_vars, ug%cell_points(:, :, i_cell), &
-            point_data, r, var_at_r)
+            point_data, ug%cell_volume(i_cell), r, var_at_r)
     case (iu_quad)
        call interpolate_quad(n_vars, ug%cell_points(:, :, i_cell), &
             point_data, r, var_at_r)
     case (iu_tetra)
        call interpolate_tetrahedron(n_vars, ug%cell_points(:, :, i_cell), &
-            point_data, r, var_at_r)
+            point_data, ug%cell_volume(i_cell), r, var_at_r)
     case default
        error stop "Not implemented"
     end select
 
   end subroutine iu_interpolate_at
 
-  subroutine interpolate_triangle(n_vars, points, point_data, r, res)
+  subroutine interpolate_triangle(n_vars, points, point_data, area, r, res)
     integer, intent(in)   :: n_vars                ! Number of variables
     real(dp), intent(in)  :: points(3, 3)          ! vertices of the triangle
     ! point_data at vertices
     real(dp), intent(in)  :: point_data(ug_max_points_per_cell, n_vars)
     real(dp), intent(in)  :: r(3)                  ! point for interpolation
+    real(dp), intent(in)  :: area                  ! Area of the cell
     real(dp), intent(out) :: res(n_vars)           ! interpolated value
     real(dp)              :: inv_area, areas(3)
     integer               :: n
 
     ! Compute areas to find barycentric coordinates. The factors 0.5 cancel in
     ! the final computation and have been left out.
-    inv_area = 1/norm2(cross_product(points(:, 2) - points(:, 1), &
-         points(:, 3) - points(:, 1)))
-    areas(1) = norm2(cross_product(r - points(:, 2), r - points(:, 3)))
-    areas(2) = norm2(cross_product(r - points(:, 3), r - points(:, 1)))
-    areas(3) = norm2(cross_product(r - points(:, 1), r - points(:, 2)))
+    areas(1) = 0.5_dp * norm2(cross_product(r - points(:, 2), r - points(:, 3)))
+    areas(2) = 0.5_dp * norm2(cross_product(r - points(:, 3), r - points(:, 1)))
+    areas(3) = 0.5_dp * norm2(cross_product(r - points(:, 1), r - points(:, 2)))
 
     ! Perform interpolation
+    inv_area = 1/area
     do n = 1, n_vars
        res(n) = sum(point_data(1:3, n) * areas) * inv_area
     end do
@@ -393,13 +433,14 @@ contains
 
   ! Based on https://www.cdsimpson.net/2014/10/barycentric-coordinates.html
   ! https://stackoverflow.com/questions/38545520/barycentric-coordinates-of-a-tetrahedron
-  subroutine interpolate_tetrahedron(n_vars, points, point_data, r, res)
+  subroutine interpolate_tetrahedron(n_vars, points, point_data, vol, r, res)
     integer, intent(in)    :: n_vars       ! Number of variables
-    real(dp), intent(in)   :: points(3, 4) ! vertices of the quad
+    real(dp), intent(in)   :: points(3, 4) ! Vertices of the tetrahedron
     ! point_data at vertices
     real(dp), intent(in)   :: point_data(ug_max_points_per_cell, n_vars)
-    real(dp), intent(in)   :: r(3)         ! point for interpolation
-    real(dp), intent(out)  :: res(n_vars)  ! interpolated value
+    real(dp), intent(in)   :: vol          ! Volume of the cell
+    real(dp), intent(in)   :: r(3)         ! Point for interpolation
+    real(dp), intent(out)  :: res(n_vars)  ! Interpolated value
     real(dp)               :: weights(4), inv_weight
     real(dp), dimension(3) :: v1r, v2r, v12, v13, v14, v23, v24
     integer                :: n
@@ -416,9 +457,9 @@ contains
     weights(2) = scalar_triple_product(v1r, v13, v14)
     weights(3) = scalar_triple_product(v1r, v14, v12)
     weights(4) = scalar_triple_product(v1r, v12, v13)
-    inv_weight = 1/scalar_triple_product(v12, v13, v14)
 
     ! Perform interpolation
+    inv_weight = 1/vol
     do n = 1, n_vars
        res(n) = sum(point_data(1:4, n) * weights) * inv_weight
     end do
@@ -666,6 +707,9 @@ contains
 
     ! Store normal vectors for each cell face
     call set_face_normal_vectors(ug)
+
+    ! Store volume of each cell
+    call set_cell_volumes(ug)
 
     ! Build kd-tree for efficient lookup of new points
     call build_kdtree(ug)
