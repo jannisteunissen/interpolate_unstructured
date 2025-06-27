@@ -281,6 +281,7 @@ contains
     integer                        :: n
     real(dp)                       :: v12(3), v13(3), v14(3)
     real(dp)                       :: area1, area2
+    real(dp), parameter            :: sixth = 1/6.0_dp
 
     allocate(ug%cell_volume(ug%n_cells))
 
@@ -309,7 +310,7 @@ contains
             v12 = p(:, 2) - p(:, 1)
             v13 = p(:, 3) - p(:, 1)
             v14 = p(:, 4) - p(:, 1)
-            ug%cell_volume(n) = scalar_triple_product(v12, v13, v14)
+            ug%cell_volume(n) = sixth * scalar_triple_product(v12, v13, v14)
           end associate
        end do
     end select
@@ -459,7 +460,7 @@ contains
     weights(4) = scalar_triple_product(v1r, v12, v13)
 
     ! Perform interpolation
-    inv_weight = 1/vol
+    inv_weight = 1/(6 * vol)
     do n = 1, n_vars
        res(n) = sum(point_data(1:4, n) * weights) * inv_weight
     end do
