@@ -919,6 +919,7 @@ contains
           if (n_steps > max_steps) return
 
           y(:, n_steps) = y_new
+          if (axisymmetric) y(1, n_steps) = max(y(1, n_steps), min_radius)
           y_field(:, n_steps) = field
           i_cell_prev = i_cell
        else
