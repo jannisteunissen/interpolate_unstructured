@@ -111,18 +111,28 @@ class BindaWriter:
             f.write(self.binary_data_storage)
 
 
-def get_cell_neighbors(cells, n_points_face):
+def get_cell_neighbors(cells, points, n_points_face):
     """Determine neighbors for each cell, with cell_neighbor[i_cell, i_vertex]
     being the index of the neighbor connected to the face with index i_vertex,
-    and -1 if there is no neighbor
+    and -1 if there is no neighbor. This method first 'removes' duplicate
+    points to more robustly find neighbors.
+
     """
     face_to_cells = defaultdict(list)
 
     # Create array of neighbors per cell, -1 indicates no neighbor
     cell_neighb = np.full_like(cells, -1, dtype=np.int32)
 
+    points_uniq, idx = np.unique(points, axis=0, return_inverse=True)
+
+    if len(points_uniq) < len(points):
+        print(f'Found {len(points) - len(points_uniq)} duplicate points')
+
+    # Cells but now with index to unique points
+    cells_uniq = idx[cells.reshape(-1)].reshape(cells.shape)
+
     # Store cells per face
-    for cell_id, cell in enumerate(cells):
+    for cell_id, cell in enumerate(cells_uniq):
         # Create faces for the current cell
         n_vertices = len(cell)
         for i in range(n_vertices):
@@ -131,7 +141,7 @@ def get_cell_neighbors(cells, n_points_face):
             face = tuple(sorted(face_points))
             face_to_cells[face].append(cell_id)
 
-    for cell_id, cell in enumerate(cells):
+    for cell_id, cell in enumerate(cells_uniq):
         n_vertices = len(cell)
         for i in range(n_vertices):
             face_points = [cell[(i + k) % n_vertices]
@@ -170,7 +180,8 @@ elif mesh.cells[0].type in ['tetra']:
 else:
     raise ValueError(f'Cell type {mesh.cells[0].type} not implemented')
 
-cell_neighbors = get_cell_neighbors(mesh.cells[0].data, n_points_per_face)
+cell_neighbors = get_cell_neighbors(mesh.cells[0].data, mesh.points,
+                                    n_points_per_face)
 
 binstore = BindaWriter()
 
