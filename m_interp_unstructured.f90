@@ -846,7 +846,7 @@ contains
   !> i_field(:) until a boundary is reached
   subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
        min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, y_field, &
-       n_steps, axisymmetric, i_icell_mask, mask_value, boundary_type)
+       n_steps, axisymmetric, i_icell_mask, mask_value, boundary_material)
     type(iu_grid_t), intent(in)   :: ug
     procedure(integrate_sub_t)    :: sub_int
     integer, intent(in)           :: ndim !< Number of spatial dimensions
@@ -875,7 +875,7 @@ contains
     integer, intent(in), optional :: mask_value
     !> What kind of boundary was reached. -1 indicates a physical boundary,
     !> otherwise the cell mask of the boundary stored.
-    integer, intent(out), optional :: boundary_type
+    integer, intent(out), optional :: boundary_material
 
     real(dp), parameter :: safety_fac = 0.8_dp
     real(dp), parameter :: inv_24 = 1/24.0_dp
@@ -916,11 +916,11 @@ contains
     ! Exit if initial cell is not valid
     if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
        ! Optionally set boundary type and then exit
-       if (present(boundary_type)) then
+       if (present(boundary_material)) then
           if (i_cell <= 0) then
-             boundary_type = -1
+             boundary_material = -1
           else
-             boundary_type = ug%icell_data(i_cell, i_icell_mask)
+             boundary_material = ug%icell_data(i_cell, i_icell_mask)
           end if
        end if
 
@@ -944,11 +944,11 @@ contains
              dx = 0.1_dp * dx
           else
              ! Optionally set boundary type and then exit
-             if (present(boundary_type)) then
-                if (i_cell_prev <= 0) then
-                   boundary_type = -1
+             if (present(boundary_material)) then
+                if (i_cell <= 0) then
+                   boundary_material = -1
                 else
-                   boundary_type = ug%icell_data(i_cell, i_icell_mask)
+                   boundary_material = ug%icell_data(i_cell, i_icell_mask)
                 end if
              end if
              return
