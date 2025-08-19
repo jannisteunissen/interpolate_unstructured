@@ -29,6 +29,7 @@ module m_interp_unstructured
      integer :: cell_type
      integer :: n_point_data
      integer :: n_cell_data
+     integer :: n_icell_data
 
      real(dp) :: rmin(3)
      real(dp) :: rmax(3)
@@ -42,12 +43,16 @@ module m_interp_unstructured
      real(dp), allocatable :: cell_face_normals(:, :, :)
      real(dp), allocatable :: point_data(:, :)
      real(dp), allocatable :: cell_data(:, :)
+     integer, allocatable  :: icell_data(:, :)
 
      ! Names of the point data variables
      character(len=128), allocatable :: point_data_names(:)
 
      ! Names of the cell data variables
      character(len=128), allocatable :: cell_data_names(:)
+
+     ! Names of the integer cell data variables
+     character(len=128), allocatable :: icell_data_names(:)
 
      ! kd-tree for searching a nearby cell
      type(kdtree2) :: tree
@@ -73,11 +78,14 @@ module m_interp_unstructured
   public :: iu_read_grid
   public :: iu_get_point_data_index
   public :: iu_get_cell_data_index
+  public :: iu_get_icell_data_index
   public :: iu_add_cell_data
+  public :: iu_add_icell_data
   public :: iu_add_point_data
   public :: iu_get_cell_center
   public :: iu_get_cell
   public :: iu_get_cell_scalar_at
+  public :: iu_get_icell_scalar_at
   public :: iu_integrate_along_field
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
@@ -119,6 +127,27 @@ contains
     i_var = ug%n_cell_data
   end subroutine iu_add_cell_data
 
+  !> Extend cell data with one variable
+  subroutine iu_add_icell_data(ug, name, i_var)
+    type(iu_grid_t), intent(inout)  :: ug
+    character(len=*), intent(in)    :: name
+    integer, intent(out)            :: i_var
+    integer, allocatable            :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%icell_data, old_data)
+    call move_alloc(ug%icell_data_names, old_names)
+    allocate(ug%icell_data(ug%n_cells, ug%n_icell_data+1))
+    allocate(ug%icell_data_names(ug%n_icell_data+1))
+
+    ug%icell_data(:, 1:ug%n_icell_data) = old_data
+    ug%icell_data_names(1:ug%n_icell_data) = old_names
+
+    ug%n_icell_data = ug%n_icell_data + 1
+    ug%icell_data_names(ug%n_icell_data) = name
+    i_var = ug%n_icell_data
+  end subroutine iu_add_icell_data
+
   !> Extend point data with one variable
   subroutine iu_add_point_data(ug, name, i_var)
     type(iu_grid_t), intent(inout)  :: ug
@@ -152,6 +181,19 @@ contains
 
     if (ix == ug%n_cell_data + 1) ix = -1
   end subroutine iu_get_cell_data_index
+
+  ! Find index of cell data variable, -1 if not present
+  subroutine iu_get_icell_data_index(ug, name, ix)
+    type(iu_grid_t), intent(in)  :: ug
+    character(len=*), intent(in) :: name
+    integer, intent(out)         :: ix
+
+    do ix = 1, ug%n_icell_data
+       if (ug%icell_data_names(ix) == name) exit
+    end do
+
+    if (ix == ug%n_icell_data + 1) ix = -1
+  end subroutine iu_get_icell_data_index
 
   ! Create kd-tree to efficiently find a (nearby) cell for a new search at a
   ! new location
@@ -351,6 +393,20 @@ contains
     call iu_get_cell(ug, r, i_guess)
     if (i_guess >= 1) res = ug%cell_data(i_guess, i_var)
   end subroutine iu_get_cell_scalar_at
+
+  ! Get the value of integer cell data at the cell that contains r
+  subroutine iu_get_icell_scalar_at(ug, r, i_var, i_guess, res)
+    type(iu_grid_t), intent(in) :: ug
+    real(dp), intent(in)        :: r(3)  ! Location
+    integer, intent(in)         :: i_var ! Index of cell data variable
+    ! On input: guess for nearby cell. Less than 1 means not set.
+    ! On output: cell containing the point r.
+    integer, intent(inout)      :: i_guess
+    integer, intent(inout)      :: res    ! Result
+
+    call iu_get_cell(ug, r, i_guess)
+    if (i_guess >= 1) res = ug%icell_data(i_guess, i_var)
+  end subroutine iu_get_icell_scalar_at
 
   ! Interpolate scalar at location r
   subroutine iu_interpolate_scalar_at(ug, r, i_var, var_at_r, i_cell)
@@ -627,7 +683,7 @@ contains
     ! Scale coordinates by this factor
     real(dp), intent(in), optional :: coord_scale_factor
     type(binda_t)                :: bfile
-    integer                      :: ix, i_point_data, i_cell_data
+    integer                      :: ix, i_point_data, i_cell_data, i_icell_data
 
     call binda_open_file(filename, bfile)
     call binda_read_header(bfile)
@@ -683,9 +739,15 @@ contains
     allocate(ug%cell_data(ug%n_cells, ug%n_cell_data))
     allocate(ug%cell_data_names(ug%n_cell_data))
 
+    ! Allocate storage for integer cell data
+    ug%n_icell_data = count(bfile%name == "icell_data")
+    allocate(ug%icell_data(ug%n_cells, ug%n_icell_data))
+    allocate(ug%icell_data_names(ug%n_icell_data))
+
     ! Read point and cell data
     i_point_data = 0
     i_cell_data = 0
+    i_icell_data = 0
 
     do ix = 1, bfile%n_entries
        if (bfile%name(ix) == "point_data") then
@@ -698,6 +760,11 @@ contains
           ug%cell_data_names(i_cell_data) = bfile%metadata(ix)
           call binda_read_float64_1d(bfile, ix, &
                ug%n_cells, ug%cell_data(:, i_cell_data))
+       else if (bfile%name(ix) == "icell_data") then
+          i_icell_data = i_icell_data + 1
+          ug%icell_data_names(i_icell_data) = bfile%metadata(ix)
+          call binda_read_int32_1d(bfile, ix, &
+               ug%n_cells, ug%icell_data(:, i_icell_data))
        end if
     end do
 
@@ -757,6 +824,10 @@ contains
        call vtk_var_r8_xml(vtkf, trim(ug%cell_data_names(n)), &
             ug%cell_data(:, n), ug%n_cells)
     end do
+    do n = 1, ug%n_icell_data
+       call vtk_var_i4_xml(vtkf, trim(ug%icell_data_names(n)), &
+            ug%icell_data(:, n), ug%n_cells)
+    end do
     call vtk_dat_xml(vtkf, "CellData", .false.)
 
     call vtk_dat_xml(vtkf, "PointData", .true.)
@@ -775,7 +846,7 @@ contains
   !> i_field(:) until a boundary is reached
   subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
        min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, y_field, &
-       n_steps, axisymmetric, i_cell_mask, mask_value)
+       n_steps, axisymmetric, i_icell_mask, mask_value, boundary_type)
     type(iu_grid_t), intent(in)   :: ug
     procedure(integrate_sub_t)    :: sub_int
     integer, intent(in)           :: ndim !< Number of spatial dimensions
@@ -796,9 +867,15 @@ contains
     !> Number of steps taken plus one. Equal to max_steps+1 if the boundary
     !> was not reached within max_steps.
     integer, intent(out)          :: n_steps
+    !> Whether the domain is axisymmetric
     logical, intent(in)           :: axisymmetric
-    integer, intent(in), optional :: i_cell_mask !< Use cell mask
-    integer, intent(in), optional :: mask_value  !< Mask value
+    !> Use integer cell mask (should be non-negative)
+    integer, intent(in), optional :: i_icell_mask
+    !< Integrate only in region where mask has this value
+    integer, intent(in), optional :: mask_value
+    !> What kind of boundary was reached. -1 indicates a physical boundary,
+    !> otherwise the cell mask of the boundary stored.
+    integer, intent(out), optional :: boundary_type
 
     real(dp), parameter :: safety_fac = 0.8_dp
     real(dp), parameter :: inv_24 = 1/24.0_dp
@@ -814,8 +891,8 @@ contains
 
     if (max_dx < min_dx) error stop "max_dx < min_dx"
     if (max_steps < 1) error stop "max_steps < 1"
-    if (present(i_cell_mask) .neqv. present(mask_value)) &
-         error stop "present(i_cell_mask) .neqv. present(mask_value)"
+    if (present(i_icell_mask) .neqv. present(mask_value)) &
+         error stop "present(i_icell_mask) .neqv. present(mask_value)"
 
     ! Set unused coordinates to zero
     r0(ndim+1:) = 0.0_dp
@@ -831,34 +908,59 @@ contains
     invalid_position = .false.
     last_rejected    = -100
     dx               = max_dx
-    i_cell_prev      = 0
+    i_cell           = 0
 
     ! Get field at initial point
-    call iu_interpolate_at(ug, r0, ndim, i_field, field, i_cell_prev)
+    call iu_interpolate_at(ug, r0, ndim, i_field, field, i_cell)
 
     ! Exit if initial cell is not valid
-    if (.not. cell_is_valid(i_cell_prev, mask_value, i_cell_mask)) return
+    if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
+       ! Optionally set boundary type and then exit
+       if (present(boundary_type)) then
+          if (i_cell <= 0) then
+             boundary_type = -1
+          else
+             boundary_type = ug%icell_data(i_cell, i_icell_mask)
+          end if
+       end if
 
-    ! Store initial field
+       return
+    end if
+
+    ! Initialization
     y_field(:, n_steps) = field
+    i_cell_prev = i_cell
 
     ! The code below implements the Bogacki–Shampine Runge-Kutta method, which
     ! is third order accurate. Higher order might not be beneficial since we
     ! are linearly interpolating fields.
     do iteration = 1, huge(1)-1
+
+       ! Handle cases in which the previous position was invalid
+       if (invalid_position) then
+          if (dx >= 2 * min_dx) then
+             ! Reduce step size
+             last_rejected = iteration - 1
+             dx = 0.1_dp * dx
+          else
+             ! Optionally set boundary type and then exit
+             if (present(boundary_type)) then
+                if (i_cell_prev <= 0) then
+                   boundary_type = -1
+                else
+                   boundary_type = ug%icell_data(i_cell, i_icell_mask)
+                end if
+             end if
+             return
+          end if
+       end if
+
+       invalid_position = .false.
        i_cell = i_cell_prev
        r0(1:ndim) = y(1:ndim, n_steps)   ! Current position
 
        ! First sub-step, re-uses field from last step
        field = y_field(:, n_steps)
-
-       if (invalid_position .and. dx >= 2 * min_dx) then
-          last_rejected = iteration - 1
-          dx = 0.1_dp * dx      ! Reduce step size significantly
-       else if (invalid_position) then
-          return             ! Reached a boundary
-       end if
-       invalid_position = .false.
 
        k(1:ndim, 1) = get_unitvec(ndim, field, reverse)
        call sub_int(ndim, r0(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 1))
@@ -868,7 +970,7 @@ contains
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
           invalid_position = .true.
           cycle
        end if
@@ -881,7 +983,7 @@ contains
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
           invalid_position = .true.
           cycle
        end if
@@ -898,7 +1000,7 @@ contains
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
        call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_cell_mask)) then
+       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
           invalid_position = .true.
           cycle
        end if
@@ -951,15 +1053,15 @@ contains
       if (reverse) unitvec = -unitvec
     end function get_unitvec
 
-    logical function cell_is_valid(ix, mask_value, i_cell_mask)
+    logical function cell_is_valid(ix, mask_value, i_icell_mask)
       integer, intent(in)           :: ix
       integer, intent(in), optional :: mask_value
-      integer, intent(in), optional :: i_cell_mask
+      integer, intent(in), optional :: i_icell_mask
 
       if (ix <= 0) then
          cell_is_valid = .false.
       else if (present(mask_value)) then
-         cell_is_valid = abs(ug%cell_data(ix, i_cell_mask) - mask_value) <= 0
+         cell_is_valid = (ug%icell_data(ix, i_icell_mask) == mask_value)
       else
          cell_is_valid = .true.
       end if

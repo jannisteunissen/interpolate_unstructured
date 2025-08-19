@@ -38,6 +38,7 @@ module m_vtk
   public :: vtk_unstr_geo_xml_close
   public :: vtk_unstr_con_xml
   public :: vtk_var_r8_xml
+  public :: vtk_var_i4_xml
 
 contains
 
@@ -177,6 +178,24 @@ contains
     vtkf%offset = vtkf%offset + bytes_i4 + n_bytes
     write(vtkf%sunit) n_bytes, var
   end subroutine vtk_var_r8_xml
+
+  subroutine vtk_var_i4_xml(vtkf, varname, var, n_data)
+    type(vtk_t), intent(inout) :: vtkf
+    integer, intent(IN)        :: n_data  !< Number of cells or nodes.
+    character(*), intent(IN)   :: varname !< Variable name.
+    integer,    intent(IN)     :: var(:)  !< Variable to be saved [1:n_cells_NN].
+    character(len=buf_len)     :: bufstr
+    integer                    :: n_bytes
+
+    write(bufstr, fmt="(A,I0,A)") repeat(' ',vtkf%indent) // &
+         '<DataArray type="Int32" Name="' // trim(varname) // &
+         '" NumberOfComponents="1" format="appended" offset="', &
+         vtkf%offset, '"/>'
+    write(vtkf%funit) trim(bufstr) // endl
+    n_bytes     = n_data * bytes_i4
+    vtkf%offset = vtkf%offset + bytes_i4 + n_bytes
+    write(vtkf%sunit) n_bytes, var
+  end subroutine vtk_var_i4_xml
 
   subroutine vtk_end_xml(vtkf)
     use, intrinsic :: iso_c_binding

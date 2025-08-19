@@ -30,6 +30,7 @@ module m_binda
   public :: binda_get_index
   public :: binda_read_header
   public :: binda_read_float64_1d
+  public :: binda_read_int32_1d
   public :: binda_read_alloc_float64_2d
   public :: binda_read_alloc_int32_2d
 
@@ -155,6 +156,29 @@ contains
        error stop "Unsupported data type"
     end select
   end subroutine binda_read_float64_1d
+
+  subroutine binda_read_int32_1d(bfile, ix, array_size, array)
+    type(binda_t), intent(in)   :: bfile
+    integer, intent(in)         :: ix
+    integer, intent(in)         :: array_size
+    integer, intent(inout)      :: array(array_size)
+    integer(int64), allocatable :: int64_array(:)
+
+    if (bfile%ndim(ix) /= 1) error stop "Invalid ndim"
+    if (bfile%dshape(1, ix) /= array_size) error stop "Invalid array_size"
+
+    select case (bfile%dtype(ix))
+    case ("int32")
+       read(bfile%file_unit, pos=bfile%offset(ix)+1) array
+    case ("int64")
+       allocate(int64_array(array_size))
+       read(bfile%file_unit, pos=bfile%offset(ix)+1) int64_array
+       array = int(int64_array)
+    case default
+       write(error_unit, *) " Found dtype: ", trim(bfile%dtype(ix))
+       error stop "Unsupported data type"
+    end select
+  end subroutine binda_read_int32_1d
 
   ! Return first index where name matches, and -1 if there is no match
   subroutine binda_get_index(bfile, name, ix)
