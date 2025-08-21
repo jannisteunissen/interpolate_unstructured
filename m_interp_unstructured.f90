@@ -84,6 +84,7 @@ module m_interp_unstructured
   public :: iu_add_point_data
   public :: iu_get_cell_center
   public :: iu_get_cell
+  public :: iu_get_cell_through_neighbors
   public :: iu_get_cell_scalar_at
   public :: iu_get_icell_scalar_at
   public :: iu_integrate_along_field
@@ -365,8 +366,8 @@ contains
     real(dp), intent(in)        :: r(3)
     !> Input: guess for i_cell or value < 1. Output: The cell containing r
     integer, intent(inout)      :: i_cell
-    integer                     :: i_start
-    real(dp)                    :: r0(3)
+    integer                     :: i_start, status
+    real(dp)                    :: r0(3), r_p(3)
 
     if (i_cell < 1) then
        i_start = find_nearby_cell_kdtree(ug, r)
@@ -377,7 +378,7 @@ contains
     ! Start from center of cell i_cell
     r0 = sum(ug%cell_points(:, :, i_start), dim=2) / ug%n_points_per_cell
 
-    call get_cell_through_neighbors(ug, r0, r, i_start, i_cell)
+    call iu_get_cell_through_neighbors(ug, r0, r, i_start, i_cell, r_p, status)
   end subroutine iu_get_cell
 
   ! Get the value of cell data at the cell that contains r
@@ -599,19 +600,28 @@ contains
     stp = dot_product(a, cross_product(b, c))
   end function scalar_triple_product
 
-  ! Determine the index of the cell at r1, given that r0 was in cell ic0
-  subroutine get_cell_through_neighbors(ug, r0, r1, ic0, ic1)
-    type(iu_grid_t), intent(in) :: ug
-    real(dp), intent(in)        :: r0(3) ! Old position
-    real(dp), intent(in)        :: r1(3) ! New position
-    integer, intent(in)         :: ic0   ! Old cell index
-    integer, intent(out)        :: ic1   ! New cell index
+  !> Determine the index of the cell at r1, given that r0 was in cell ic0. The
+  !> returned status is 0 if the final point was reached, 1 if a different
+  !> material was encountered, and -1 if a domain boundary was reached.
+  subroutine iu_get_cell_through_neighbors(ug, r0, r1, ic0, ic1, r_p, status, &
+       i_icell_mask)
+    type(iu_grid_t), intent(in)   :: ug
+    real(dp), intent(in)          :: r0(3)  ! Old position
+    real(dp), intent(in)          :: r1(3)  ! New position
+    integer, intent(in)           :: ic0    ! Old cell index
+    integer, intent(out)          :: ic1    ! New cell index
+    real(dp), intent(out)         :: r_p(3) ! Final position
+    integer, intent(out)          :: status ! Indicates the exit condition
+    !> Index of integer cell data, corresponding to e.g. the material. The
+    !> search will stop when this cell data changes.
+    integer, intent(in), optional :: i_icell_mask
 
-    real(dp) :: distance_left, path_unit_vec(3), r_p(3)
+    real(dp) :: distance_left, path_unit_vec(3)
     real(dp) :: face_distance
     integer  :: i_face
 
     distance_left = norm2(r1 - r0)
+    status = 0
 
     if (distance_left < tiny_distance) then
        ic1 = ic0
@@ -629,14 +639,27 @@ contains
        distance_left = distance_left - face_distance
 
        if (distance_left > 0) then
+          ! Move to neighboring cell
           ic1 = ug%neighbors(i_face, ic1)
-          if (ic1 < 1) exit     ! Exit when moving outside domain
+
+          if (ic1 < 1) then
+             ! Exit when moving outside domain
+             status = -1
+             exit
+          else if (present(i_icell_mask)) then
+             ! Exit if mask changes
+             if (ug%icell_data(ic0, i_icell_mask) /= &
+                  ug%icell_data(ic1, i_icell_mask)) then
+                status = 1
+                exit
+             end if
+          end if
        else
           exit                  ! Done
        end if
     end do
 
-  end subroutine get_cell_through_neighbors
+  end subroutine iu_get_cell_through_neighbors
 
   ! Given a cell, a direction, and a start position, determine through which
   ! cell face the path goes as well as the distance to the intersection point
