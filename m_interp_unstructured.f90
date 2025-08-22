@@ -91,6 +91,7 @@ module m_interp_unstructured
   public :: iu_interpolate_at
   public :: iu_interpolate_scalar_at
   public :: iu_write_vtk
+  public :: iu_point_is_inside_cell
 
 contains
 
@@ -366,7 +367,7 @@ contains
     real(dp), intent(in)        :: r(3)
     !> Input: guess for i_cell or value < 1. Output: The cell containing r
     integer, intent(inout)      :: i_cell
-    integer                     :: i_start, status
+    integer                     :: i_start, status, n_steps
     real(dp)                    :: r0(3), r_p(3)
 
     if (i_cell < 1) then
@@ -378,7 +379,9 @@ contains
     ! Start from center of cell i_cell
     r0 = sum(ug%cell_points(:, :, i_start), dim=2) / ug%n_points_per_cell
 
-    call iu_get_cell_through_neighbors(ug, r0, r, i_start, i_cell, r_p, status)
+    call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_start, &
+         i_cell, r_p, n_steps, status)
+
   end subroutine iu_get_cell
 
   ! Get the value of cell data at the cell that contains r
@@ -603,15 +606,17 @@ contains
   !> Determine the index of the cell at r1, given that r0 was in cell ic0. The
   !> returned status is 0 if the final point was reached, 1 if a different
   !> material was encountered, and -1 if a domain boundary was reached.
-  subroutine iu_get_cell_through_neighbors(ug, r0, r1, ic0, ic1, r_p, status, &
-       i_icell_mask)
+  subroutine iu_get_cell_through_neighbors(ug, max_steps, r0, r1, ic0, ic1, &
+       r_p, n_steps, status, i_icell_mask)
     type(iu_grid_t), intent(in)   :: ug
-    real(dp), intent(in)          :: r0(3)  ! Old position
-    real(dp), intent(in)          :: r1(3)  ! New position
-    integer, intent(in)           :: ic0    ! Old cell index
-    integer, intent(out)          :: ic1    ! New cell index
-    real(dp), intent(out)         :: r_p(3) ! Final position
-    integer, intent(out)          :: status ! Indicates the exit condition
+    integer, intent(in)           :: max_steps ! Maximum number of steps
+    real(dp), intent(in)          :: r0(3)     ! Old position
+    real(dp), intent(in)          :: r1(3)     ! New position
+    integer, intent(in)           :: ic0       ! Old cell index
+    integer, intent(out)          :: ic1       ! New cell index
+    real(dp), intent(out)         :: r_p(3)    ! Final position
+    integer, intent(out)          :: n_steps   ! How many steps were taken
+    integer, intent(out)          :: status    ! Indicates the exit condition
     !> Index of integer cell data, corresponding to e.g. the material. The
     !> search will stop when this cell data changes.
     integer, intent(in), optional :: i_icell_mask
@@ -632,7 +637,7 @@ contains
     r_p           = r0          ! Current position
     ic1           = ic0         ! Current cell
 
-    do
+    do n_steps = 1, max_steps
        call get_cell_intersection(ug, path_unit_vec, r_p, ic1, &
             face_distance, i_face)
 
@@ -699,6 +704,28 @@ contains
     r_p = r_p + face_distance * path_unit_vec
 
   end subroutine get_cell_intersection
+
+  ! Check if point is inside cell
+  pure logical function iu_point_is_inside_cell(ug, r, i_cell)
+    type(iu_grid_t), intent(in) :: ug
+    real(dp), intent(in)        :: r(3)
+    integer, intent(in)         :: i_cell
+    integer                     :: k
+    real(dp)                    :: face_normal(3), r_face(3)
+    real(dp), parameter         :: small_number = 1e-10_dp
+
+    iu_point_is_inside_cell = .true.
+
+    do k = 1, ug%n_faces_per_cell
+       face_normal = ug%cell_face_normals(:, k, i_cell)
+       r_face = ug%cell_points(:, k, i_cell)
+
+       if (dot_product(r_face - r, face_normal) < -small_number) then
+          iu_point_is_inside_cell = .false.
+          exit
+       end if
+    end do
+  end function iu_point_is_inside_cell
 
   subroutine iu_read_grid(filename, ug, coord_scale_factor)
     character(len=*), intent(in) :: filename
