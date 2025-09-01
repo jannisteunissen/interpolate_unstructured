@@ -82,6 +82,9 @@ module m_interp_unstructured
   public :: iu_add_cell_data
   public :: iu_add_icell_data
   public :: iu_add_point_data
+  public :: iu_reserve_cell_data_storage
+  public :: iu_reserve_icell_data_storage
+  public :: iu_reserve_point_data_storage
   public :: iu_get_cell_center
   public :: iu_get_cell
   public :: iu_get_cell_through_neighbors
@@ -113,16 +116,10 @@ contains
     type(iu_grid_t), intent(inout)  :: ug
     character(len=*), intent(in)    :: name
     integer, intent(out)            :: i_var
-    real(dp), allocatable           :: old_data(:, :)
-    character(len=128), allocatable :: old_names(:)
 
-    call move_alloc(ug%cell_data, old_data)
-    call move_alloc(ug%cell_data_names, old_names)
-    allocate(ug%cell_data(ug%n_cells, ug%n_cell_data+1))
-    allocate(ug%cell_data_names(ug%n_cell_data+1))
-
-    ug%cell_data(:, 1:ug%n_cell_data) = old_data
-    ug%cell_data_names(1:ug%n_cell_data) = old_names
+    if (ug%n_point_data == size(ug%point_data, 2)) then
+       call iu_reserve_cell_data_storage(ug, 1)
+    end if
 
     ug%n_cell_data = ug%n_cell_data + 1
     ug%cell_data_names(ug%n_cell_data) = name
@@ -134,16 +131,10 @@ contains
     type(iu_grid_t), intent(inout)  :: ug
     character(len=*), intent(in)    :: name
     integer, intent(out)            :: i_var
-    integer, allocatable            :: old_data(:, :)
-    character(len=128), allocatable :: old_names(:)
 
-    call move_alloc(ug%icell_data, old_data)
-    call move_alloc(ug%icell_data_names, old_names)
-    allocate(ug%icell_data(ug%n_cells, ug%n_icell_data+1))
-    allocate(ug%icell_data_names(ug%n_icell_data+1))
-
-    ug%icell_data(:, 1:ug%n_icell_data) = old_data
-    ug%icell_data_names(1:ug%n_icell_data) = old_names
+    if (ug%n_point_data == size(ug%point_data, 2)) then
+       call iu_reserve_icell_data_storage(ug, 1)
+    end if
 
     ug%n_icell_data = ug%n_icell_data + 1
     ug%icell_data_names(ug%n_icell_data) = name
@@ -155,21 +146,63 @@ contains
     type(iu_grid_t), intent(inout)  :: ug
     character(len=*), intent(in)    :: name
     integer, intent(out)            :: i_var
-    real(dp), allocatable           :: old_data(:, :)
-    character(len=128), allocatable :: old_names(:)
 
-    call move_alloc(ug%point_data, old_data)
-    call move_alloc(ug%point_data_names, old_names)
-    allocate(ug%point_data(ug%n_points, ug%n_point_data+1))
-    allocate(ug%point_data_names(ug%n_point_data+1))
-
-    ug%point_data(:, 1:ug%n_point_data) = old_data
-    ug%point_data_names(1:ug%n_point_data) = old_names
+    if (ug%n_point_data == size(ug%point_data, 2)) then
+       call iu_reserve_point_data_storage(ug, 1)
+    end if
 
     ug%n_point_data = ug%n_point_data + 1
     ug%point_data_names(ug%n_point_data) = name
     i_var = ug%n_point_data
   end subroutine iu_add_point_data
+
+  !> Reserve space for cell data
+  subroutine iu_reserve_cell_data_storage(ug, n)
+    type(iu_grid_t), intent(inout)  :: ug
+    integer, intent(in)             :: n
+    real(dp), allocatable           :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%cell_data, old_data)
+    call move_alloc(ug%cell_data_names, old_names)
+    allocate(ug%cell_data(ug%n_cells, ug%n_cell_data+n))
+    allocate(ug%cell_data_names(ug%n_cell_data+n))
+
+    ug%cell_data(:, 1:ug%n_cell_data) = old_data
+    ug%cell_data_names(1:ug%n_cell_data) = old_names
+  end subroutine iu_reserve_cell_data_storage
+
+  !> Reserve space for integer cell data
+  subroutine iu_reserve_icell_data_storage(ug, n)
+    type(iu_grid_t), intent(inout)  :: ug
+    integer, intent(in)             :: n
+    integer, allocatable            :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%icell_data, old_data)
+    call move_alloc(ug%icell_data_names, old_names)
+    allocate(ug%icell_data(ug%n_cells, ug%n_icell_data+n))
+    allocate(ug%icell_data_names(ug%n_icell_data+n))
+
+    ug%icell_data(:, 1:ug%n_icell_data) = old_data
+    ug%icell_data_names(1:ug%n_icell_data) = old_names
+  end subroutine iu_reserve_icell_data_storage
+
+  !> Reserve space for point data
+  subroutine iu_reserve_point_data_storage(ug, n)
+    type(iu_grid_t), intent(inout)  :: ug
+    integer, intent(in)             :: n
+    real(dp), allocatable           :: old_data(:, :)
+    character(len=128), allocatable :: old_names(:)
+
+    call move_alloc(ug%point_data, old_data)
+    call move_alloc(ug%point_data_names, old_names)
+    allocate(ug%point_data(ug%n_points, ug%n_point_data+n))
+    allocate(ug%point_data_names(ug%n_point_data+n))
+
+    ug%point_data(:, 1:ug%n_point_data) = old_data
+    ug%point_data_names(1:ug%n_point_data) = old_names
+  end subroutine iu_reserve_point_data_storage
 
   ! Find index of cell data variable, -1 if not present
   subroutine iu_get_cell_data_index(ug, name, ix)
