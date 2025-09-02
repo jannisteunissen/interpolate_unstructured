@@ -470,15 +470,24 @@ contains
     ! On input: guess for nearby cell. Less than 1 means not set.
     ! On output: cell containing the point r.
     integer, intent(inout)      :: i_cell
-    integer                     :: n
-    real(dp)                    :: point_data(ug_max_points_per_cell, n_vars)
 
     if (i_cell > ug%n_cells) error stop "i_cell > ug%n_cells"
-
     call iu_get_cell(ug, r, i_cell)
+    if (i_cell <= 0) return ! Exit if cell not found
 
-    ! Exit if cell not found
-    if (i_cell <= 0) return
+    call iu_interpolate_at_icell(ug, r, n_vars, i_vars, var_at_r, i_cell)
+  end subroutine iu_interpolate_at
+
+  ! Interpolate multiple variables at location r in cell i_cell
+  subroutine iu_interpolate_at_icell(ug, r, n_vars, i_vars, var_at_r, i_cell)
+    type(iu_grid_t), intent(in) :: ug
+    real(dp), intent(in)        :: r(3)             ! Interpolate at this point
+    integer, intent(in)         :: n_vars           ! Number of variables to interpolate
+    integer, intent(in)         :: i_vars(n_vars)   ! Indices of variables
+    real(dp), intent(inout)     :: var_at_r(n_vars) ! Result at r
+    integer, intent(in)         :: i_cell
+    integer                     :: n
+    real(dp)                    :: point_data(ug_max_points_per_cell, n_vars)
 
     do n = 1, n_vars
        point_data(1:ug%n_points_per_cell, n) = &
@@ -499,7 +508,7 @@ contains
        error stop "Not implemented"
     end select
 
-  end subroutine iu_interpolate_at
+  end subroutine iu_interpolate_at_icell
 
   subroutine interpolate_triangle(n_vars, points, point_data, area, r, res)
     integer, intent(in)   :: n_vars                ! Number of variables
@@ -964,10 +973,12 @@ contains
     real(dp), parameter :: inv_24 = 1/24.0_dp
     real(dp), parameter :: inv_9 = 1/9.0_dp
     real(dp), parameter :: min_radius = 1e-12_dp
+    real(dp), parameter :: eps = 1e-8_dp
 
     integer  :: i_cell, i_cell_prev, iteration, last_rejected
+    integer  :: status, n_its
     real(dp) :: y_new(ndim+nvar), y_2nd(ndim+nvar)
-    real(dp) :: r0(3), r(3), field(ndim)
+    real(dp) :: r0(3), r(3), r_p(3), field(ndim)
     real(dp) :: err, scales(ndim+nvar), dx, dx_factor
     real(dp) :: k(ndim+nvar, 4), max_growth
     logical  :: invalid_position
@@ -1013,6 +1024,7 @@ contains
     ! Initialization
     y_field(:, n_steps) = field
     i_cell_prev = i_cell
+    status = 0
 
     ! The code below implements the Bogacki–Shampine Runge-Kutta method, which
     ! is third order accurate. Higher order might not be beneficial since we
@@ -1020,12 +1032,12 @@ contains
     do iteration = 1, huge(1)-1
 
        ! Handle cases in which the previous position was invalid
-       if (invalid_position) then
-          if (dx >= 2 * min_dx) then
-             ! Reduce step size
-             last_rejected = iteration - 1
-             dx = 0.1_dp * dx
-          else
+       if (status /= 0) then
+          ! Reduce step size
+          last_rejected = iteration - 1
+          dx = (1 - eps) * norm2(r_p - r0)
+
+          if (dx < min_dx) then
              ! Optionally set boundary type and then exit
              if (present(boundary_material)) then
                 if (i_cell <= 0) then
@@ -1052,11 +1064,10 @@ contains
        r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
-          invalid_position = .true.
-          cycle
-       end if
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
+            r_p, n_its, status, i_icell_mask)
+       if (status /= 0) cycle
+       call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 2) = get_unitvec(ndim, field, reverse)
        call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 2))
@@ -1065,11 +1076,10 @@ contains
        r(1:ndim) = r0(1:ndim) + 0.75_dp * dx * k(1:ndim, 2)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
-          invalid_position = .true.
-          cycle
-       end if
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
+            r_p, n_its, status, i_icell_mask)
+       if (status /= 0) cycle
+       call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 3) = get_unitvec(ndim, field, reverse)
        call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 3))
@@ -1082,11 +1092,10 @@ contains
        r(1:ndim) = y_new(1:ndim)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_interpolate_at(ug, r, ndim, i_field, field, i_cell)
-       if (.not. cell_is_valid(i_cell, mask_value, i_icell_mask)) then
-          invalid_position = .true.
-          cycle
-       end if
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
+            r_p, n_its, status, i_icell_mask)
+       if (status /= 0) cycle
+       call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 4) = get_unitvec(ndim, field, reverse)
        call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 4))
