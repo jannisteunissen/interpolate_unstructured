@@ -170,6 +170,10 @@ contains
 
     ug%cell_data(:, 1:ug%n_cell_data) = old_data
     ug%cell_data_names(1:ug%n_cell_data) = old_names
+
+    ! Initialize reserved storage
+    ug%cell_data(:, ug%n_cell_data+1:) = 0
+    ug%cell_data_names(ug%n_cell_data+1:) = "UNDEFINED_NAME"
   end subroutine iu_reserve_cell_data_storage
 
   !> Reserve space for integer cell data
@@ -186,6 +190,10 @@ contains
 
     ug%icell_data(:, 1:ug%n_icell_data) = old_data
     ug%icell_data_names(1:ug%n_icell_data) = old_names
+
+    ! Initialize reserved storage
+    ug%icell_data(:, ug%n_icell_data+1:) = 0
+    ug%icell_data_names(ug%n_icell_data+1:) = "UNDEFINED_NAME"
   end subroutine iu_reserve_icell_data_storage
 
   !> Reserve space for point data
@@ -202,6 +210,10 @@ contains
 
     ug%point_data(:, 1:ug%n_point_data) = old_data
     ug%point_data_names(1:ug%n_point_data) = old_names
+
+    ! Initialize reserved storage
+    ug%point_data(:, ug%n_point_data+1:) = 0
+    ug%point_data_names(ug%n_point_data+1:) = "UNDEFINED_NAME"
   end subroutine iu_reserve_point_data_storage
 
   ! Find index of cell data variable, -1 if not present
