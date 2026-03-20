@@ -59,13 +59,17 @@ module m_interp_unstructured
   end type iu_grid_t
 
   interface
-     subroutine integrate_sub_t(ndim, r, field, nvar, integrand)
+     subroutine integrate_sub_t(ndim, nvar, field, y, dy_var)
        import
-       integer, intent(in)   :: ndim
-       real(dp), intent(in)  :: r(ndim)
+       integer, intent(in)   :: ndim !< Number of spatial dimensions
+       integer, intent(in)   :: nvar !< Number of additional variables
+       !> Current field, as interpolated from the mesh
        real(dp), intent(in)  :: field(ndim)
-       integer, intent(in)   :: nvar
-       real(dp), intent(out) :: integrand(nvar)
+       !> y(1:ndim) holds the current position, y(ndim+1:ndim+nvar) holds
+       !> other variables
+       real(dp), intent(in)  :: y(ndim+nvar)
+       !> The spatial derivatives of y(ndim+1:ndim+nvar)
+       real(dp), intent(out) :: dy_var(nvar)
      end subroutine integrate_sub_t
   end interface
 
@@ -948,13 +952,13 @@ contains
 
   !> Integrate a function along the field given by the point data in
   !> i_field(:) until a boundary is reached
-  subroutine iu_integrate_along_field(ug, ndim, sub_int, r_start, i_field, &
-       min_dx, max_dx, max_steps, rtol, atol, reverse, nvar, y, y_field, &
+  subroutine iu_integrate_along_field(ug, ndim, nvar, sub_int, i_field, &
+       min_dx, max_dx, max_steps, rtol, atol, reverse, y, y_field, &
        n_steps, axisymmetric, i_icell_mask, mask_value, boundary_material)
     type(iu_grid_t), intent(in)   :: ug
     procedure(integrate_sub_t)    :: sub_int
     integer, intent(in)           :: ndim !< Number of spatial dimensions
-    real(dp), intent(in)          :: r_start(ndim) !< Start location
+    integer, intent(in)           :: nvar !< Number of variables to integrate
     integer, intent(in)           :: i_field(ndim) !< Field to trace (stored as point data)
     real(dp), intent(in)          :: min_dx    !< Min distance per step
     real(dp), intent(in)          :: max_dx    !< Max distance per step
@@ -962,9 +966,9 @@ contains
     real(dp), intent(in)          :: rtol    !< Relative tolerance
     real(dp), intent(in)          :: atol    !< Absolute tolerance
     logical, intent(in)           :: reverse !< Go in minus field direction
-    integer, intent(in)           :: nvar !< Number of variables to integrate
-    !> Solution curve. y(:, i) contains position (ndim) and the nvar
-    !> solution variables
+
+    !> Solution curve. y(1:ndim, i) contains position (ndim) and y(ndim+1:, i)
+    !> the nvar solution variables. y(:, 1) is the initial position and state.
     real(dp), intent(inout)       :: y(ndim+nvar, max_steps)
     !> Field along the solution curve
     real(dp), intent(inout)       :: y_field(ndim, max_steps)
@@ -989,7 +993,7 @@ contains
 
     integer  :: i_cell, i_cell_prev, iteration, last_rejected
     integer  :: status, n_its
-    real(dp) :: y_new(ndim+nvar), y_2nd(ndim+nvar)
+    real(dp) :: ys(ndim+nvar), y_2nd(ndim+nvar)
     real(dp) :: r0(3), r(3), r_p(3), field(ndim)
     real(dp) :: err, scales(ndim+nvar), dx, dx_factor
     real(dp) :: k(ndim+nvar, 4), max_growth
@@ -1000,17 +1004,13 @@ contains
     if (present(i_icell_mask) .neqv. present(mask_value)) &
          error stop "present(i_icell_mask) .neqv. present(mask_value)"
 
-    ! Set unused coordinates to zero
+    ! These always have three components. Set unused coordinates to zero.
     r0(ndim+1:) = 0.0_dp
-    r(ndim+1:) = 0.0_dp
-
-    ! Initial solution
-    n_steps = 1
-    y(1:ndim, n_steps) = r_start
-    y(ndim+1:ndim+nvar, n_steps) = 0.0_dp
+    r(ndim+1:)  = 0.0_dp
 
     ! Initialization
-    r0(1:ndim)       = r_start
+    n_steps          = 1
+    r0(1:ndim)       = y(1:ndim, 1)
     invalid_position = .false.
     last_rejected    = -100
     dx               = max_dx
@@ -1064,67 +1064,76 @@ contains
 
        invalid_position = .false.
        i_cell = i_cell_prev
-       r0(1:ndim) = y(1:ndim, n_steps)   ! Current position
+
+       ! Initial position for this step
+       r0(1:ndim) = y(1:ndim, n_steps)
+
+       ! Current state
+       ys = y(:, n_steps)
 
        ! First sub-step, re-uses field from last step
        field = y_field(:, n_steps)
 
+       ! Unit vector in direction of integration
        k(1:ndim, 1) = get_unitvec(ndim, field, reverse)
-       call sub_int(ndim, r0(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 1))
+
+       ! Compute derivative of y
+       call sub_int(ndim, nvar, field, ys, k(ndim+1:ndim+nvar, 1))
 
        ! Second sub-step
-       r(1:ndim) = r0(1:ndim) + 0.5_dp * dx * k(1:ndim, 1)
+       ys = y(:, n_steps) + 0.5_dp * dx * k(:, 1)
+       r(1:ndim) = ys(1:ndim)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
-            r_p, n_its, status, i_icell_mask)
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, &
+            i_cell_prev, i_cell, r_p, n_its, status, i_icell_mask)
        if (status /= 0) cycle
        call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 2) = get_unitvec(ndim, field, reverse)
-       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 2))
+       call sub_int(ndim, nvar, field, ys, k(ndim+1:ndim+nvar, 2))
 
        ! Third sub-step
-       r(1:ndim) = r0(1:ndim) + 0.75_dp * dx * k(1:ndim, 2)
+       ys = y(:, n_steps) + 0.75_dp * dx * k(:, 2)
+       r(1:ndim) = ys(1:ndim)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
-            r_p, n_its, status, i_icell_mask)
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, &
+            i_cell_prev, i_cell, r_p, n_its, status, i_icell_mask)
        if (status /= 0) cycle
        call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 3) = get_unitvec(ndim, field, reverse)
-       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 3))
+       call sub_int(ndim, nvar, field, ys, k(ndim+1:ndim+nvar, 3))
 
        ! Update with third-order scheme
-       y_new = y(:, n_steps) + dx * inv_9 * &
+       ys = y(:, n_steps) + dx * inv_9 * &
             (2 * k(:, 1) + 3 * k(:, 2) + 4 * k(:, 3))
-
-       ! Fourth sub-step
-       r(1:ndim) = y_new(1:ndim)
+       r(1:ndim) = ys(1:ndim)
        if (axisymmetric) r(1) = max(r(1), min_radius)
 
-       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, i_cell_prev, i_cell, &
-            r_p, n_its, status, i_icell_mask)
+       ! Fourth sub-step
+       call iu_get_cell_through_neighbors(ug, huge(1), r0, r, &
+            i_cell_prev, i_cell, r_p, n_its, status, i_icell_mask)
        if (status /= 0) cycle
        call iu_interpolate_at_icell(ug, r, ndim, i_field, field, i_cell)
 
        k(1:ndim, 4) = get_unitvec(ndim, field, reverse)
-       call sub_int(ndim, r(1:ndim), field, nvar, k(ndim+1:ndim+nvar, 4))
+       call sub_int(ndim, nvar, field, ys, k(ndim+1:ndim+nvar, 4))
 
        ! Estimate with second-order scheme
        y_2nd = y(:, n_steps) + dx * inv_24 * &
             (7 * k(:, 1) + 6 * k(:, 2) + 8 * k(:, 3) + 3 * k(:, 4))
 
-       scales = atol + max(abs(y_new), abs(y_2nd)) * rtol
-       err = sqrt(sum(((y_new-y_2nd)/scales)**2) / 3)
+       scales = atol + max(abs(ys), abs(y_2nd)) * rtol
+       err = sqrt(sum(((ys-y_2nd)/scales)**2) / 3)
 
        if (err <= 1 .or. dx < 2 * min_dx) then
           ! Step is accepted, advance solution y
           n_steps = n_steps + 1
           if (n_steps > max_steps) return
 
-          y(:, n_steps) = y_new
+          y(:, n_steps) = ys
           if (axisymmetric) y(1, n_steps) = max(y(1, n_steps), min_radius)
           y_field(:, n_steps) = field
           i_cell_prev = i_cell

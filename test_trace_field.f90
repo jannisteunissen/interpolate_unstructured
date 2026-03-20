@@ -8,7 +8,6 @@ program test_trace_field
   integer            :: n, i_vx, i_vy
 
   integer  :: max_steps, n_steps, ndim, nvar
-  real(dp) :: r_start(2)
   real(dp) :: min_dx, max_dx
   real(dp) :: rtol, atol
   logical  :: reverse, axisymmetric
@@ -26,7 +25,6 @@ program test_trace_field
   call iu_write_vtk(ug, 'test_data/test_trace_field.vtu')
 
   ndim      = 2
-  r_start   = [1.500_dp, 0.0_dp]
   rtol      = 1e-3_dp
   atol      = 1e-3_dp
   min_dx    = 1e-5_dp
@@ -40,9 +38,14 @@ program test_trace_field
   allocate(y(ndim+nvar, max_steps))
   allocate(y_field(ndim, max_steps))
 
-  call iu_integrate_along_field(ug, ndim, sub_int, r_start, [i_vx, i_vy], &
+  y(1:ndim, 1) = [1.500_dp, 0.0_dp]
+
+  ! 1.5 * pi / 2, so that final solution is about zero
+  y(ndim+1:, 1) = -0.75_dp * acos(-1.0_dp)
+
+  call iu_integrate_along_field(ug, ndim, nvar, sub_int, [i_vx, i_vy], &
        min_dx, max_dx, max_steps, rtol, atol, reverse, &
-       nvar, y, y_field, n_steps, axisymmetric)
+       y, y_field, n_steps, axisymmetric)
 
   if (n_steps > max_steps) error stop "Boundary not reached"
 
@@ -51,13 +54,13 @@ program test_trace_field
 
 contains
 
-  subroutine sub_int(ndim, r, field, nvar, integrand)
+  subroutine sub_int(ndim, nvar, field, y, dy_var)
     integer, intent(in)   :: ndim
-    real(dp), intent(in)  :: r(ndim)
-    real(dp), intent(in)  :: field(ndim)
     integer, intent(in)   :: nvar
-    real(dp), intent(out) :: integrand(nvar)
-    integrand(:) = 1.0_dp
+    real(dp), intent(in)  :: field(ndim)
+    real(dp), intent(in)  :: y(ndim+nvar)
+    real(dp), intent(out) :: dy_var(nvar)
+    dy_var(:) = 1.0_dp
   end subroutine sub_int
 
 end program test_trace_field
