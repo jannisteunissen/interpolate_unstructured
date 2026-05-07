@@ -44,6 +44,10 @@ class BindaWriter:
         if data.ndim > 8:
             raise ValueError("Number of dimensions cannot exceed 8.")
 
+        # Convert integer data to 32 bits signed integers
+        if np.issubdtype(data.dtype, np.integer):
+            data = data.astype(np.int32)
+
         # Convert numpy array to binary data
         binary_data = data.tobytes()
         self.binary_data_storage.extend(binary_data)
@@ -196,7 +200,17 @@ for var in mesh.point_data:
 
 for var in mesh.cell_data:
     clean_name = var.replace(',', '')
-    binstore.add_entry('cell_data', mesh.cell_data[var], clean_name)
+    data = mesh.cell_data[var]
+
+    if isinstance(data, list):
+        # Extract first cell block (only one cell block is allowed)
+        data = data[0]
+
+    if np.issubdtype(data.dtype, np.integer):
+        binstore.add_entry('icell_data', data, clean_name)
+    else:
+        binstore.add_entry('cell_data', data, clean_name)
+
     print('Storing cell data: ', clean_name)
 
 fname = args.output_basename + '.binda'
