@@ -6,7 +6,7 @@ program test_triangle
   integer, parameter :: dp = kind(0.0d0)
   type(iu_grid_t)    :: ug
 
-  call iu_read_grid('test_data/tetra.binda', ug)
+  call iu_read_grid('test_data/tetra.vtu', ug)
 
   call test_interpolation(ug, 1000)
 
@@ -53,6 +53,7 @@ contains
        end if
     end do
 
+    print *, "PASSED"
   end subroutine test_interpolation
 
   real(dp) function solution(r)

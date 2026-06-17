@@ -1,12 +1,14 @@
-F90 := gfortran
-FFLAGS := -O2 -g -std=f2008 -Wall -Wextra
-ifeq ($(DEBUG), 1)
-	FFLAGS += -O0 -fcheck=all
-endif
 TESTS := test_triangle test_quad test_tetra test_vtk test_trace_field
 EXAMPLES := benchmark $(TESTS)
 LIB := libinterp_unstructured.a
 OBJECTS := m_interp_unstructured.o kdtree2_module.o m_binda.o m_vtk.o
+SRC_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
+F90 := gfortran
+FFLAGS := -O2 -g -std=f2008 -Wall -Wextra -cpp -DSRC_DIR="\"$(SRC_DIR)\""
+ifeq ($(DEBUG), 1)
+	FFLAGS += -O0 -fcheck=all
+endif
 
 # So that kdtree2_module.f90 can be found
 vpath %.f90 kdtree2/src

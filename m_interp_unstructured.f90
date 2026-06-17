@@ -785,15 +785,49 @@ contains
     end do
   end function iu_point_is_inside_cell
 
+  subroutine iu_convert_to_binda(filename, binda_file, verbose)
+    character(len=*), intent(in)    :: filename
+    character(len=256), intent(out) :: binda_file
+    logical, intent(in)             :: verbose
+    integer                         :: exitstat, cmdstat, dot_pos
+    character(len=512)              :: command
+    character(len=*), parameter     :: script = SRC_DIR // "convert_to_binary.py"
+    character(len=256)              :: basename
+
+    ! Get base name (without extension)
+    dot_pos = index(trim(filename), '.', back=.true.)
+    if (dot_pos > 0) then
+       basename = filename(1:dot_pos-1)
+    else
+       basename = trim(filename)
+    end if
+
+    binda_file = trim(basename) // ".binda"
+
+    if (filename /= binda_file) then
+       if (verbose) print *, "Converting ", trim(filename), &
+            " to ", trim(binda_file)
+       command = "python3 " // script // " " // trim(filename)
+
+       call execute_command_line(trim(command), exitstat=exitstat, &
+            cmdstat=cmdstat)
+
+       if (cmdstat /= 0 .or. exitstat /= 0) &
+            error stop "Error: conversion to .binda failed"
+    end if
+  end subroutine iu_convert_to_binda
+
   subroutine iu_read_grid(filename, ug, coord_scale_factor)
     character(len=*), intent(in) :: filename
     type(iu_grid_t), intent(out) :: ug
     ! Scale coordinates by this factor
     real(dp), intent(in), optional :: coord_scale_factor
     type(binda_t)                :: bfile
+    character(len=256)           :: binda_filename
     integer                      :: ix, i_point_data, i_cell_data, i_icell_data
 
-    call binda_open_file(filename, bfile)
+    call iu_convert_to_binda(filename, binda_filename, .true.)
+    call binda_open_file(binda_filename, bfile)
     call binda_read_header(bfile)
 
     call binda_get_index(bfile, "cells", ix)

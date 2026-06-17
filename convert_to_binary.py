@@ -167,10 +167,20 @@ parser = argparse.ArgumentParser(
     description='Convert unstructured grid to binary files')
 parser.add_argument('infile', type=str, help='Input file')
 parser.add_argument('-output_basename', type=str, help='Basename for output')
+parser.add_argument('-force', action='store_true',
+                    help='Write .binda file also if it is newer than infile')
 args = parser.parse_args()
 
 if args.output_basename is None:
     args.output_basename = os.path.splitext(args.infile)[0]
+
+fname = args.output_basename + '.binda'
+
+# Skip processing if output is newer than input, unless -force is given
+if not args.force and os.path.exists(fname) \
+        and os.path.getmtime(fname) >= os.path.getmtime(args.infile):
+    print(f'{fname} is up to date (use -force to overwrite)')
+    raise SystemExit(0)
 
 mesh = meshio.read(args.infile)
 
@@ -213,6 +223,5 @@ for var in mesh.cell_data:
 
     print('Storing cell data: ', clean_name)
 
-fname = args.output_basename + '.binda'
 binstore.write_to_file(fname)
 print(f'Stored {fname}')
